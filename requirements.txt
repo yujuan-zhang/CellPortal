@@ -5,3 +5,4 @@ igraph
 leidenalg
 matplotlib
 pandas
+boto3
