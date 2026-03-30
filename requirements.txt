@@ -1,0 +1,7 @@
+scanpy
+celltypist
+scikit-misc
+igraph
+leidenalg
+matplotlib
+pandas
