@@ -8,10 +8,22 @@ st.title("AI-Powered Single-Cell Analysis Platform")
 
 @st.cache_data
 def load_data():
-    
-    adata = sc.read_h5ad("scanpy-tutorials-main/write/pbmc3k_annotated.h5ad")
+    import boto3
+    import os
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=st.secrets["aws"]["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=st.secrets["aws"]["AWS_SECRET_ACCESS_KEY"],
+        region_name=st.secrets["aws"]["AWS_DEFAULT_REGION"]
+    )
 
+    local_path = "/tmp/pbmc3k_annotated.h5ad"
+    if not os.path.exists(local_path):
+        s3.download_file("cellportal-data", "processed/pbmc3k_annotated.h5ad", local_path)
+    adata = sc.read_h5ad(local_path)
     return adata
+
+   
 
 adata = load_data()
 st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
