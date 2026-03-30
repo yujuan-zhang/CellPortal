@@ -31,6 +31,20 @@ st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
 tab1, tab2, tab3 = st.tabs(["UMAP", "Cell Type Composition", "Marker Genes"])
 
 
+# 侧边栏介绍
+st.sidebar.title("About")
+st.sidebar.markdown("""
+An end-to-end scRNA-seq analysis platform powered by AI.
+
+**AI Annotation Models:**
+- ✅ CellTypist
+- 🔜 scGPT *(Coming Soon)*
+- 🔜 Geneformer *(Coming Soon)*
+
+🌐 [GitHub](https://github.com/yujuan-zhang/CellPortal)
+""")
+st.sidebar.divider()
+
 # 侧边栏参数
 st.sidebar.header("Analysis Parameters")
 resolution = st.sidebar.slider("Clustering Resolution", 0.1, 2.0, 0.7, 0.1)
