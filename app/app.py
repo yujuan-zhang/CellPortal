@@ -9,7 +9,7 @@ with st.container(border=True):
     st.subheader("Load Data")
     input_mode = st.radio(
         "Select input method",
-        ["Use demo dataset (PBMC 3k)", "Upload .h5ad file"]
+        ["Use demo dataset (PBMC 3k)", "Upload .h5ad file", "Enter GEO Accession ID"]
     )
 @st.cache_data
 def load_data():
@@ -34,7 +34,8 @@ def load_data():
 
 if input_mode == "Use demo dataset (PBMC 3k)":
     adata = load_data()
-else:
+
+elif input_mode == "Upload .h5ad file":
     uploaded_file = st.file_uploader("Upload .h5ad file", type=["h5ad"])
     if uploaded_file is not None:
         import tempfile
@@ -45,6 +46,15 @@ else:
         st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
     else:
         st.info("Please upload a .h5ad file to continue.")
+        st.stop()
+
+elif input_mode == "Enter GEO Accession ID":
+    geo_id = st.text_input("Enter GEO Accession ID (e.g. GSE176078)")
+    if geo_id:
+        st.info(f"GEO download coming soon. Please upload the processed .h5ad file for {geo_id} manually for now.")
+        st.stop()
+    else:
+        st.info("Please enter a GEO Accession ID.")
         st.stop()
 
 st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
