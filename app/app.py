@@ -5,7 +5,12 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="AI-Powered Single-Cell Analysis Platform", layout="wide")
 st.title("AI-Powered Single-Cell Analysis Platform")
-
+with st.container(border=True):
+    st.subheader("Load Data")
+    input_mode = st.radio(
+        "Select input method",
+        ["Use demo dataset (PBMC 3k)", "Upload .h5ad file"]
+    )
 @st.cache_data
 def load_data():
     import boto3
@@ -27,7 +32,21 @@ def load_data():
 
    
 
-adata = load_data()
+if input_mode == "Use demo dataset (PBMC 3k)":
+    adata = load_data()
+else:
+    uploaded_file = st.file_uploader("Upload .h5ad file", type=["h5ad"])
+    if uploaded_file is not None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".h5ad", delete=False) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+        adata = sc.read_h5ad(tmp_path)
+        st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
+    else:
+        st.info("Please upload a .h5ad file to continue.")
+        st.stop()
+
 st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
 
 tab1, tab2, tab3 = st.tabs(["UMAP", "Cell Type Composition", "Marker Genes"])
