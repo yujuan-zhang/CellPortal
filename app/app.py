@@ -21,6 +21,8 @@ def load_data():
     if not os.path.exists(local_path):
         s3.download_file("cellportal-data", "processed/pbmc3k_annotated.h5ad", local_path)
     adata = sc.read_h5ad(local_path)
+    # 只保留必要数据，节省内存
+    del adata.layers
     return adata
 
    
@@ -101,10 +103,10 @@ with tab2:
     cell_counts = adata.obs["leiden"].value_counts().reset_index()
     cell_counts.columns = ["Cell Type", "Count"]
     cell_counts["Percentage"] = (cell_counts["Count"] / cell_counts["Count"].sum() * 100).round(2)
-    st.dataframe(cell_counts, width='stretch')
+    st.dataframe(cell_counts, use_container_width=True)
     st.bar_chart(cell_counts.set_index("Cell Type")["Count"])
 
 with tab3:
     st.subheader("Top Marker Genes per Cluster")
     marker_df = pd.DataFrame(adata.uns["rank_genes_groups"]["names"]).head(10)
-    st.dataframe(marker_df, width='stretch')
+    st.dataframe(marker_df, use_container_width=True)
