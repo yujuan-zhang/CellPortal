@@ -57,21 +57,37 @@ run_button = st.sidebar.button("Re-run Analysis")
 with tab1:
     st.subheader("UMAP - Cell Clusters")
     if run_button:
-        with st.spinner("Re-running clustering and annotation..."):
-            adata_run = adata.copy()
-            sc.pp.neighbors(adata_run, n_neighbors=n_neighbors, n_pcs=40)
-            sc.tl.umap(adata_run)
-            sc.tl.leiden(adata_run, resolution=resolution)
+        progress = st.progress(0)
+        status = st.empty()
 
-            import celltypist
-            from celltypist import models
-            adata_pred = adata_run.copy()
-            sc.pp.normalize_total(adata_pred, target_sum=1e4)
-            sc.pp.log1p(adata_pred)
-            model = models.Model.load(model="Immune_All_Low.pkl")
-            predictions = celltypist.annotate(adata_pred, model=model, majority_voting=True)
-            adata_run.obs["cell_type"] = predictions.predicted_labels["majority_voting"]
-            st.session_state["adata_run"] = adata_run
+        status.info("Step 1/4: Copying data...")
+        adata_run = adata.copy()
+        progress.progress(10)
+
+        status.info("Step 2/4: Computing neighborhood graph...")
+        sc.pp.neighbors(adata_run, n_neighbors=n_neighbors, n_pcs=40)
+        progress.progress(40)
+
+        status.info("Step 3/4: Computing UMAP...")
+        sc.tl.umap(adata_run)
+        progress.progress(60)
+
+        status.info("Step 4/4: Running Leiden clustering...")
+        sc.tl.leiden(adata_run, resolution=resolution)
+        progress.progress(80)
+
+        import celltypist
+        from celltypist import models
+        adata_pred = adata_run.copy()
+        sc.pp.normalize_total(adata_pred, target_sum=1e4)
+        sc.pp.log1p(adata_pred)
+        model = models.Model.load(model="Immune_All_Low.pkl")
+        predictions = celltypist.annotate(adata_pred, model=model, majority_voting=True)
+        adata_run.obs["cell_type"] = predictions.predicted_labels["majority_voting"]
+        progress.progress(100)
+
+        status.success("Analysis complete!")
+        st.session_state["adata_run"] = adata_run
 
     if "adata_run" in st.session_state:
         adata_run = st.session_state["adata_run"]
