@@ -6,3 +6,4 @@ leidenalg
 matplotlib
 pandas
 boto3
+streamlit
