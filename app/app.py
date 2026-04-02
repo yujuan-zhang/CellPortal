@@ -14,17 +14,7 @@ with st.container(border=True):
     )
 @st.cache_data
 def load_data():
-    import boto3
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=st.secrets["aws"]["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=st.secrets["aws"]["AWS_SECRET_ACCESS_KEY"],
-        region_name=st.secrets["aws"]["AWS_DEFAULT_REGION"]
-    )
-
-    local_path = "/tmp/pbmc3k_annotated.h5ad"
-    if not os.path.exists(local_path):
-        s3.download_file("cellportal-data", "processed/pbmc3k_annotated.h5ad", local_path)
+    local_path = os.path.join(os.path.dirname(__file__), "pbmc3k_annotated.h5ad")
     adata = sc.read_h5ad(local_path)
     del adata.layers
     return adata
@@ -231,7 +221,7 @@ with tab2:
     cell_counts = adata_run.obs[count_col].value_counts().reset_index()
     cell_counts.columns = ["Cell Type", "Count"]
     cell_counts["Percentage"] = (cell_counts["Count"] / cell_counts["Count"].sum() * 100).round(2)
-    st.dataframe(cell_counts, use_container_width=True)
+    st.dataframe(cell_counts, width='stretch')
     st.bar_chart(cell_counts.set_index("Cell Type")["Count"])
 
 with tab3:
@@ -254,4 +244,4 @@ with tab3:
                 st.session_state["adata_run"] = adata_run
 
         marker_df = pd.DataFrame(adata_run.uns["rank_genes_groups"]["names"]).head(10)
-        st.dataframe(marker_df, use_container_width=True)
+        st.dataframe(marker_df, width='stretch')

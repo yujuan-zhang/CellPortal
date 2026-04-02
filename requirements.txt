@@ -6,5 +6,5 @@ leidenalg
 matplotlib
 pandas
 streamlit
-GEOparse
+geoparse
 ffq
