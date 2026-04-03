@@ -99,7 +99,8 @@ run_button = st.sidebar.button("Re-run Analysis")
 
 
 def needs_preprocessing(a):
-    return "leiden" not in a.obs.columns or "X_umap" not in a.obsm
+    has_clustering = "leiden" in a.obs.columns or "louvain" in a.obs.columns
+    return not has_clustering or "X_umap" not in a.obsm
 
 def run_preprocessing(a, n_neighbors, resolution, progress=None, status=None):
     def _update(pct, msg):
@@ -180,13 +181,14 @@ with tab1:
     else:
         adata_run = adata
 
-    st.info(f"Current clusters: {adata_run.obs['leiden'].nunique()}")
+    cluster_col = "leiden" if "leiden" in adata_run.obs.columns else "louvain"
+    st.info(f"Current clusters: {adata_run.obs[cluster_col].nunique()}")
 
-    color_options = ["Leiden Clusters (Scanpy)"]
+    color_options = ["Clusters (Scanpy)"]
     if "cell_type" in adata_run.obs.columns:
         color_options.append("Cell Type Annotation (CellTypist)")
     color_option = st.selectbox("Color by", color_options)
-    color_by = "leiden" if "Leiden" in color_option else "cell_type"
+    color_by = cluster_col if "Clusters" in color_option else "cell_type"
     st.session_state["color_by"] = color_by
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -221,7 +223,7 @@ with tab2:
     if "cell_type" in adata_run.obs.columns:
         count_col = "cell_type"
     else:
-        count_col = "leiden"
+        count_col = "leiden" if "leiden" in adata_run.obs.columns else "louvain"
     cell_counts = adata_run.obs[count_col].value_counts().reset_index()
     cell_counts.columns = ["Cell Type", "Count"]
     cell_counts["Percentage"] = (cell_counts["Count"] / cell_counts["Count"].sum() * 100).round(2)
@@ -236,9 +238,10 @@ with tab3:
         st.warning("Gene names were not detected in this dataset. Marker genes cannot be displayed.")
     else:
         # Use the same grouping as Color by selection
-        groupby = st.session_state.get("color_by", "leiden")
+        default_cluster = "leiden" if "leiden" in adata_run.obs.columns else "louvain"
+        groupby = st.session_state.get("color_by", default_cluster)
         if groupby not in adata_run.obs.columns:
-            groupby = "leiden"
+            groupby = default_cluster
 
         # Recompute if groupby changed or not yet computed
         current_groupby = adata_run.uns.get("rank_genes_groups", {}).get("params", {}).get("groupby")
