@@ -15,8 +15,12 @@ with st.container(border=True):
 @st.cache_data
 def load_data():
     local_path = os.path.join(os.path.dirname(__file__), "pbmc3k_annotated.h5ad")
-    adata = sc.read_h5ad(local_path)
-    del adata.layers
+    if os.path.exists(local_path):
+        adata = sc.read_h5ad(local_path)
+        if hasattr(adata, 'layers'):
+            del adata.layers
+    else:
+        adata = sc.datasets.pbmc3k_processed()
     return adata
 
 
