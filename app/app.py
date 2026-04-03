@@ -112,8 +112,14 @@ def run_preprocessing(a, n_neighbors, resolution, progress=None, status=None):
     sc.pp.log1p(a)
 
     _update(15, "Preprocessing: selecting highly variable genes...")
-    sc.pp.highly_variable_genes(a, n_top_genes=2000, flavor="seurat")
-    a = a[:, a.var.highly_variable].copy()
+    try:
+        sc.pp.highly_variable_genes(a, n_top_genes=2000, flavor="seurat")
+        a = a[:, a.var.highly_variable].copy()
+    except ValueError:
+        import numpy as np
+        gene_var = np.asarray(a.X.var(axis=0)).flatten()
+        top_idx = np.argsort(gene_var)[-2000:]
+        a = a[:, top_idx].copy()
 
     _update(25, "Preprocessing: scaling & PCA...")
     a.raw = a  # save log1p normalized matrix for CellTypist
