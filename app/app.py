@@ -255,7 +255,7 @@ with tab2:
     cell_counts = adata_run.obs[count_col].value_counts().reset_index()
     cell_counts.columns = ["Cell Type", "Count"]
     cell_counts["Percentage"] = (cell_counts["Count"] / cell_counts["Count"].sum() * 100).round(2)
-    st.dataframe(cell_counts, use_container_width=True)
+    st.dataframe(cell_counts, width='stretch')
     st.bar_chart(cell_counts.set_index("Cell Type")["Count"])
 
 with tab3:
@@ -285,6 +285,6 @@ with tab3:
         else:
             try:
                 marker_df = pd.DataFrame(adata_run.uns["rank_genes_groups"]["names"]).head(10)
-                st.dataframe(marker_df, use_container_width=True)
+                st.dataframe(marker_df, width='stretch')
             except Exception as e:
                 st.error(f"Could not display marker genes: {e}")
