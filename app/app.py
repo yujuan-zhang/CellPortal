@@ -1,5 +1,8 @@
 import streamlit as st
 import traceback
+import os
+
+st.set_page_config(page_title="AI-Powered Single-Cell Analysis Platform", layout="wide")
 
 try:
     import scanpy as sc
@@ -7,13 +10,11 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import os
 except Exception as _import_err:
     st.error(f"Import failed: {_import_err}")
     st.code(traceback.format_exc())
     st.stop()
 
-st.set_page_config(page_title="AI-Powered Single-Cell Analysis Platform", layout="wide")
 st.title("AI-Powered Single-Cell Analysis Platform")
 with st.container(border=True):
     st.subheader("Load Data")
