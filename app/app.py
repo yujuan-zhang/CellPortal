@@ -1,6 +1,8 @@
 import streamlit as st
 import scanpy as sc
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import os
 
@@ -12,9 +14,9 @@ with st.container(border=True):
         "Select input method",
         ["Use demo dataset (PBMC 3k)", "Upload .h5ad file", "Enter GEO Accession ID"]
     )
-@st.cache_data
+@st.cache_resource
 def load_data():
-    local_path = os.path.join(os.path.dirname(__file__), "pbmc3k_annotated.h5ad")
+    local_path = os.path.join(os.path.dirname(__file__), "..", "data", "pbmc3k_annotated.h5ad")
     if os.path.exists(local_path):
         adata = sc.read_h5ad(local_path)
         if hasattr(adata, 'layers'):
@@ -25,8 +27,13 @@ def load_data():
 
 
 if input_mode == "Use demo dataset (PBMC 3k)":
-    adata = load_data()
-    st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
+    try:
+        adata = load_data()
+        st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
+    except Exception as e:
+        st.error(f"Failed to load demo dataset: {e}")
+        st.exception(e)
+        st.stop()
 
 elif input_mode == "Upload .h5ad file":
     uploaded_file = st.file_uploader("Upload .h5ad file", type=["h5ad"])
@@ -43,35 +50,50 @@ elif input_mode == "Upload .h5ad file":
 
 elif input_mode == "Enter GEO Accession ID":
     geo_id = st.text_input("Enter GEO Accession ID (e.g. GSE84133)")
-    if geo_id:
+    load_btn = st.button("Load GEO Data", disabled=not bool(geo_id))
+
+    if load_btn and geo_id:
+        import sys
+        pipeline_path = os.path.join(os.path.dirname(__file__), "..", "pipeline")
+        if pipeline_path not in sys.path:
+            sys.path.insert(0, pipeline_path)
+        from ingest import download_geo, get_geo_tissue_hint, auto_select_celltypist_model
+
         with st.spinner(f"Downloading {geo_id} from GEO..."):
-            import sys
-            pipeline_path = os.path.join(os.path.dirname(__file__), "..", "pipeline")
-            if pipeline_path not in sys.path:
-                sys.path.insert(0, pipeline_path)
-            from ingest import download_geo, get_geo_tissue_hint, auto_select_celltypist_model
-            result_path = download_geo(geo_id, output_dir="/tmp")
-            if result_path.endswith(".h5ad"):
-                adata = sc.read_h5ad(result_path)
-            elif os.path.isdir(result_path):
-                import glob
-                mtx_files = glob.glob(f"{result_path}/**/*matrix.mtx*", recursive=True)
-                if mtx_files:
-                    mtx_dir = os.path.dirname(mtx_files[0])
-                    adata = sc.read_10x_mtx(mtx_dir, var_names="gene_symbols", cache=True)
+            try:
+                result_path = download_geo(geo_id, output_dir="/tmp")
+                if result_path.endswith(".h5ad"):
+                    _geo_adata = sc.read_h5ad(result_path)
+                elif os.path.isdir(result_path):
+                    import glob
+                    mtx_files = glob.glob(f"{result_path}/**/*matrix.mtx*", recursive=True)
+                    if mtx_files:
+                        mtx_dir = os.path.dirname(mtx_files[0])
+                        _geo_adata = sc.read_10x_mtx(mtx_dir, var_names="gene_symbols", cache=True)
+                    else:
+                        st.error("Could not find matrix file in the downloaded GEO dataset.")
+                        st.stop()
                 else:
-                    st.error("Could not find matrix file. Please upload manually.")
+                    st.error("Could not load data from GEO. Please upload manually.")
                     st.stop()
-            else:
-                st.error("Could not load data. Please upload manually.")
+                _geo_adata.obs_names_make_unique()
+                tissue_text = get_geo_tissue_hint(geo_id, output_dir="/tmp")
+                st.session_state["geo_adata"] = _geo_adata
+                st.session_state["geo_id_loaded"] = geo_id
+                st.session_state["adata_raw"] = _geo_adata.copy()
+                st.session_state["celltypist_model"] = auto_select_celltypist_model(tissue_text)
+                st.session_state.pop("adata_run", None)
+            except Exception as e:
+                st.error(f"GEO loading failed: {e}")
                 st.stop()
-            tissue_text = get_geo_tissue_hint(geo_id, output_dir="/tmp")
-            st.session_state["celltypist_model"] = auto_select_celltypist_model(tissue_text)
-        adata.obs_names_make_unique()
-        st.session_state["adata_raw"] = adata.copy()
+        st.rerun()
+
+    loaded_geo_id = st.session_state.get("geo_id_loaded", "")
+    if loaded_geo_id and geo_id and loaded_geo_id == geo_id and "geo_adata" in st.session_state:
+        adata = st.session_state["geo_adata"]
         st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
     else:
-        st.info("Please enter a GEO Accession ID.")
+        st.info("Please enter a GEO Accession ID and click Load.")
         st.stop()
 
 tab1, tab2, tab3 = st.tabs(["UMAP", "Cell Type Composition", "Marker Genes"])
@@ -185,7 +207,7 @@ with tab1:
     if "adata_run" in st.session_state:
         adata_run = st.session_state["adata_run"]
     else:
-        adata_run = adata
+        adata_run = adata.copy()
 
     cluster_col = "leiden" if "leiden" in adata_run.obs.columns else "louvain"
     st.info(f"Current clusters: {adata_run.obs[cluster_col].nunique()}")
@@ -233,7 +255,7 @@ with tab2:
     cell_counts = adata_run.obs[count_col].value_counts().reset_index()
     cell_counts.columns = ["Cell Type", "Count"]
     cell_counts["Percentage"] = (cell_counts["Count"] / cell_counts["Count"].sum() * 100).round(2)
-    st.dataframe(cell_counts, width='stretch')
+    st.dataframe(cell_counts, use_container_width=True)
     st.bar_chart(cell_counts.set_index("Cell Type")["Count"])
 
 with tab3:
@@ -249,12 +271,20 @@ with tab3:
         if groupby not in adata_run.obs.columns:
             groupby = default_cluster
 
-        # Recompute if groupby changed or not yet computed
+        # Compute marker genes on demand
         current_groupby = adata_run.uns.get("rank_genes_groups", {}).get("params", {}).get("groupby")
         if current_groupby != groupby:
-            with st.spinner(f"Computing marker genes by {groupby}..."):
-                sc.tl.rank_genes_groups(adata_run, groupby, method="wilcoxon")
-                st.session_state["adata_run"] = adata_run
-
-        marker_df = pd.DataFrame(adata_run.uns["rank_genes_groups"]["names"]).head(10)
-        st.dataframe(marker_df, width='stretch')
+            if st.button("Compute Marker Genes"):
+                with st.spinner(f"Computing marker genes by {groupby}..."):
+                    try:
+                        sc.tl.rank_genes_groups(adata_run, groupby, method="wilcoxon")
+                        st.session_state["adata_run"] = adata_run
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Marker gene computation failed: {e}")
+        else:
+            try:
+                marker_df = pd.DataFrame(adata_run.uns["rank_genes_groups"]["names"]).head(10)
+                st.dataframe(marker_df, use_container_width=True)
+            except Exception as e:
+                st.error(f"Could not display marker genes: {e}")
