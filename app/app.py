@@ -113,7 +113,7 @@ An end-to-end scRNA-seq analysis platform powered by AI.
 
 **AI Annotation Models:**
 - ✅ CellTypist
-- 🔜 scGPT *(Coming Soon)*
+- 🔜 scGPT *(GPU required, not available on free tier)*
 - 🔜 Geneformer *(Coming Soon)*
 
 🌐 [GitHub](https://github.com/yujuan-zhang/CellPortal)
