@@ -50,6 +50,6 @@ def run_scgpt_embedding(input_path: str, output_path: str, model_dir: str = "mod
 
 if __name__ == "__main__":
     run_scgpt_embedding(
-        input_path="scanpy-tutorials-main/write/pbmc3k_annotated.h5ad",
-        output_path="scanpy-tutorials-main/write/pbmc3k_scgpt.h5ad"
+        input_path="data/pbmc3k_annotated.h5ad",
+        output_path="data/pbmc3k_scgpt.h5ad"
     )
