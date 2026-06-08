@@ -1,0 +1,8 @@
+scanpy-tutorials-main/
+models/
+**/__pycache__/
+**/*.pyc
+.git/
+.vscode/
+.DS_Store
+README.md

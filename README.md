@@ -71,12 +71,13 @@ Interactive Visualization (Streamlit)
 ```
 CellPortal/
 ├── pipeline/
-│   ├── preprocess.py     # Scanpy QC, normalization, clustering
-│   ├── annotate.py       # CellTypist cell type annotation
-│   └── router.py         # Input routing (FASTQ / matrix / h5ad)
+│   ├── ingest.py             # Data ingestion and input routing
+│   └── annotate_scgpt.py     # scGPT cell type annotation
 ├── app/
-│   └── app.py            # Streamlit frontend
+│   └── app.py                # Streamlit frontend
+├── Dockerfile
 ├── requirements.txt
+├── runtime.txt
 └── README.md
 ```
 

@@ -2,3 +2,5 @@
 models/
 *.h5ad
 __pycache__/
+.DS_Store
+.vscode/
