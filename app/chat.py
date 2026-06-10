@@ -272,6 +272,159 @@ _JS_OBSERVER = """
 </script>
 """ % {"marker": _PANEL_MARKER, "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE}
 
+# Voice strip: mic button (STT) + auto-read responses (TTS)
+# Runs inside the chat panel iframe; uses browser Web Speech API (Chrome recommended)
+_VOICE_JS = """
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #111318;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  body {
+    display: flex; align-items: center;
+    padding: 6px 14px; gap: 10px;
+    border-top: 1px solid #1e2d24;
+  }
+  #mic {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: #1c2b22; border: 1px solid #2e4a38;
+    color: #a8d8b8; font-size: 17px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; outline: none;
+    transition: background .2s, box-shadow .2s;
+  }
+  #mic:hover { background: #243624; }
+  #mic.on {
+    background: #5a1818; border-color: #c03030; color: #fff;
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(192,48,48,.5); }
+    50%      { box-shadow: 0 0 0 9px rgba(192,48,48,0); }
+  }
+  #status {
+    font-size: 11px; color: #5a8a68; flex: 1;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  #tts-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: #1c2b22; border: 1px solid #2e4a38;
+    color: #7ab890; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; outline: none; transition: background .2s;
+  }
+  #tts-btn:hover { background: #243624; }
+  #tts-btn.muted { color: #555; border-color: #333; }
+</style>
+</head>
+<body>
+  <button id="mic"     title="Click to speak">🎤</button>
+  <span   id="status">Tap mic to speak</span>
+  <button id="tts-btn" title="Toggle auto-read">🔊</button>
+</body>
+<script>
+(function () {
+  var mic    = document.getElementById('mic');
+  var status = document.getElementById('status');
+  var ttsBtn = document.getElementById('tts-btn');
+  var pWin   = window.parent;
+  var pDoc   = pWin.document;
+  var pSS    = pWin.sessionStorage;
+
+  // ── TTS toggle ───────────────────────────────────────────────────
+  var ttsEnabled = pSS.getItem('cp_tts') !== 'off';
+  ttsBtn.classList.toggle('muted', !ttsEnabled);
+  ttsBtn.addEventListener('click', function () {
+    ttsEnabled = !ttsEnabled;
+    pSS.setItem('cp_tts', ttsEnabled ? 'on' : 'off');
+    ttsBtn.classList.toggle('muted', !ttsEnabled);
+    if (!ttsEnabled) pWin.speechSynthesis.cancel();
+  });
+
+  // ── TTS: speak new assistant messages ────────────────────────────
+  function trySpeak() {
+    if (!ttsEnabled) return;
+    var msgs = pDoc.querySelectorAll('[data-testid="stChatMessage"]');
+    var cnt  = msgs.length;
+    var done = parseInt(pSS.getItem('cp_spoken') || '0');
+    if (cnt <= done) return;
+    var last = msgs[cnt - 1];
+    if (last.querySelector('[data-testid="stChatMessageAvatarUser"]')) {
+      pSS.setItem('cp_spoken', cnt); return;
+    }
+    var el = last.querySelector('[data-testid="stMarkdownContainer"] p');
+    if (!el) return;
+    var text = el.textContent.trim();
+    if (!text) return;
+    pSS.setItem('cp_spoken', cnt);
+    pWin.speechSynthesis.cancel();
+    var utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US'; utt.rate = 0.95; utt.pitch = 1.0;
+    pWin.speechSynthesis.speak(utt);
+  }
+  new MutationObserver(trySpeak).observe(pDoc.body, { childList: true, subtree: true });
+
+  // ── STT ──────────────────────────────────────────────────────────
+  var SR = pWin.SpeechRecognition || pWin.webkitSpeechRecognition;
+  if (!SR) {
+    mic.textContent = '✗';
+    status.textContent = 'Voice not supported — use Chrome';
+    return;
+  }
+
+  var rec = new SR();
+  rec.lang = 'en-US';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  var active = false;
+
+  mic.addEventListener('click', function () {
+    if (active) { rec.stop(); return; }
+    try { rec.start(); }
+    catch (e) { status.textContent = 'Mic error: ' + e.message; }
+  });
+
+  rec.onstart = function () {
+    active = true;
+    mic.classList.add('on');
+    mic.textContent = '🔴';
+    status.textContent = 'Listening…';
+  };
+  rec.onend = function () {
+    active = false;
+    mic.classList.remove('on');
+    mic.textContent = '🎤';
+    if (status.textContent === 'Listening…') status.textContent = 'Tap mic to speak';
+  };
+  rec.onerror = function (e) {
+    status.textContent = e.error === 'no-speech' ? 'No speech — try again' : 'Error: ' + e.error;
+  };
+  rec.onresult = function (e) {
+    var text = e.results[0][0].transcript;
+    status.textContent = '“' + text + '”';
+    submitToChat(text);
+  };
+
+  function submitToChat(text) {
+    var ta = pDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
+    if (!ta) { status.textContent = 'Input not found'; return; }
+    var setter = Object.getOwnPropertyDescriptor(pWin.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(ta, text);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    setTimeout(function () {
+      var sub = pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
+      if (sub) sub.click();
+    }, 80);
+  }
+})();
+</script>
+</html>
+"""
+
 
 # ── 消息处理 ──────────────────────────────────────────────────────────────────
 
@@ -333,6 +486,8 @@ def render(adata_run) -> None:
                 st.rerun()
 
         st.divider()
+
+        components.html(_VOICE_JS, height=52, scrolling=False)
 
         for msg in ss.cp_messages:
             with st.chat_message(msg["role"]):
