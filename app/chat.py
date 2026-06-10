@@ -107,17 +107,18 @@ def call_llm(user_message: str, history: list, adata) -> str:
 
 # ── UI 常量 ───────────────────────────────────────────────────────────────────
 
-_FAB_OPEN   = "💬"   # shown when panel is closed
-_FAB_CLOSE  = "✕"    # shown when panel is open — always visible at bottom-right
-_PHONE_BTN  = "📞"   # always-visible voice/call FAB below the chat FAB
+_FAB_OPEN    = "💬"
+_FAB_CLOSE   = "✕"
+_PHONE_BTN   = "📞"
 _PANEL_MARKER = "cp-panel-anchor"
+_CALL_ANCHOR  = "cp-call-anchor"
 
 _CSS = """
 <style>
-/* ── Chat FAB — raised to sit above phone FAB ── */
+/* ── Chat FAB ── */
 .cp-fab-wrapper {
     position: fixed !important;
-    bottom: 100px !important;
+    bottom: 140px !important;
     right: 26px !important;
     z-index: 10000 !important;
     width: 60px !important;
@@ -127,7 +128,7 @@ _CSS = """
 /* ── Phone FAB ── */
 .cp-phone-wrapper {
     position: fixed !important;
-    bottom: 26px !important;
+    bottom: 66px !important;
     right: 26px !important;
     z-index: 10000 !important;
     width: 60px !important;
@@ -192,10 +193,10 @@ _CSS = """
         inset 0 1px 3px rgba(255,255,255,.30) !important;
 }
 
-/* ── 浮动聊天面板（MutationObserver 动态加 class）── */
+/* ── 文字聊天面板 ── */
 .cp-chat-panel {
     position: fixed !important;
-    bottom: 174px !important;
+    bottom: 214px !important;
     right: 30px !important;
     width: 380px !important;
     max-height: 560px !important;
@@ -241,7 +242,7 @@ _CSS = """
     color: #e8f5ed !important;
 }
 
-/* 聊天输入框发送箭头按钮保持默认 */
+/* chat input submit arrow */
 .cp-chat-panel [data-testid="stChatInputSubmitButton"] button,
 .cp-chat-panel [data-testid="stChatInputSubmitButton"] button:focus,
 .cp-chat-panel [data-testid="stChatInputSubmitButton"] button:hover {
@@ -250,6 +251,48 @@ _CSS = """
     border: none !important;
     color: inherit !important;
 }
+
+/* ── Voice call panel ── */
+.cp-call-panel {
+    position: fixed !important;
+    bottom: 214px !important;
+    right: 26px !important;
+    width: 360px !important;
+    max-height: 540px !important;
+    overflow-y: auto !important;
+    background: #0d1117 !important;
+    border: 1px solid #1e3a28 !important;
+    border-radius: 18px !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.7) !important;
+    z-index: 9999 !important;
+    padding-bottom: 8px !important;
+}
+.cp-call-panel p, .cp-call-panel li { font-size: 13px !important; line-height: 1.6 !important; color: #d0e8d8 !important; }
+.cp-call-panel strong, .cp-call-panel b { color: #ffffff !important; font-weight: 600 !important; }
+.cp-call-panel button,
+.cp-call-panel button:focus,
+.cp-call-panel button:active {
+    background: #1a2e20 !important;
+    background-color: #1a2e20 !important;
+    color: #b8d8c0 !important;
+    border: 1px solid #2a4a32 !important;
+    border-radius: 10px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 6px 10px !important;
+    box-shadow: none !important;
+}
+.cp-call-panel button:hover {
+    background: #22402a !important;
+    background-color: #22402a !important;
+    border-color: #3a6040 !important;
+    color: #e0f0e8 !important;
+}
+.cp-call-panel [data-testid="stChatInputSubmitButton"] button,
+.cp-call-panel [data-testid="stChatInputSubmitButton"] button:hover {
+    background: transparent !important; background-color: transparent !important;
+    border: none !important; color: inherit !important;
+}
 </style>
 """
 
@@ -257,9 +300,10 @@ _CSS = """
 _JS_OBSERVER = """
 <script>
 (function() {
-    const MARKER     = "%(marker)s";
-    const FAB_LABELS = new Set(["%(fab_open)s", "%(fab_close)s"]);
-    const PHONE_BTN  = "%(phone)s";
+    const MARKER      = "%(marker)s";
+    const CALL_ANCHOR = "%(call_anchor)s";
+    const FAB_LABELS  = new Set(["%(fab_open)s", "%(fab_close)s"]);
+    const PHONE_BTN   = "%(phone)s";
 
     function stButtonWrapper(b) {
         let el = b.parentElement;
@@ -270,22 +314,24 @@ _JS_OBSERVER = """
         return null;
     }
 
+    function floatByAnchor(id, cssClass) {
+        const d = window.parent.document;
+        const a = d.getElementById(id);
+        if (!a) return;
+        let el = a;
+        while (el && el.getAttribute) {
+            if (el.getAttribute('data-testid') === 'stVerticalBlock') {
+                if (!el.classList.contains(cssClass)) el.classList.add(cssClass);
+                break;
+            }
+            el = el.parentElement;
+        }
+    }
+
     function applyFloat() {
         const d = window.parent.document;
-
-        // Float the chat panel
-        const anchor = d.getElementById(MARKER);
-        if (anchor) {
-            let el = anchor;
-            while (el && el.getAttribute) {
-                if (el.getAttribute('data-testid') === 'stVerticalBlock') {
-                    if (!el.classList.contains('cp-chat-panel'))
-                        el.classList.add('cp-chat-panel');
-                    break;
-                }
-                el = el.parentElement;
-            }
-        }
+        floatByAnchor(MARKER,      'cp-chat-panel');
+        floatByAnchor(CALL_ANCHOR, 'cp-call-panel');
 
         // Style all FAB buttons
         for (const b of d.querySelectorAll('button')) {
@@ -309,7 +355,8 @@ _JS_OBSERVER = """
     obs.observe(window.parent.document.body, { childList: true, subtree: true });
 })();
 </script>
-""" % {"marker": _PANEL_MARKER, "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE, "phone": _PHONE_BTN}
+""" % {"marker": _PANEL_MARKER, "call_anchor": _CALL_ANCHOR,
+       "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE, "phone": _PHONE_BTN}
 
 # Voice strip: mic button (STT) + auto-read responses (TTS)
 # Runs inside the chat panel iframe; uses browser Web Speech API (Chrome recommended)
@@ -487,84 +534,246 @@ def _handle_message(text: str, adata_run) -> None:
     st.rerun()
 
 
+# Voice call component — continuous STT→LLM→TTS loop, phone-call style UI
+_CALL_VOICE_JS = """
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html,body{margin:0;padding:0;background:#0d1117;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:10px 8px;gap:8px;}
+  .ring{width:72px;height:72px;border-radius:50%;background:#1a2e20;border:2px solid #2e4a38;
+    font-size:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    transition:all .25s;user-select:none;}
+  .ring.listening{background:#1b3d25;border-color:#5abd78;animation:glow-g 1.2s ease-in-out infinite;}
+  .ring.speaking {background:#151e30;border-color:#4a7ab8;animation:glow-b 1.4s ease-in-out infinite;}
+  .ring.idle     {background:#1a2e20;border-color:#2e4a38;}
+  @keyframes glow-g{0%,100%{box-shadow:0 0 0 0 rgba(90,189,120,.45);}50%{box-shadow:0 0 0 14px rgba(90,189,120,0);}}
+  @keyframes glow-b{0%,100%{box-shadow:0 0 0 0 rgba(74,122,184,.45);}50%{box-shadow:0 0 0 14px rgba(74,122,184,0);}}
+  #st {font-size:12px;color:#5a9a6a;letter-spacing:.3px;}
+  #lh {font-size:11px;color:#3a5a44;max-width:310px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .hint{font-size:10px;color:#2a3a2e;margin-top:2px;}
+</style>
+</head>
+<body>
+  <div id="ring" class="ring idle" title="Tap to start/stop">🎤</div>
+  <div id="st">Connecting…</div>
+  <div id="lh"></div>
+  <div class="hint">Tap ring to pause/resume · AI responds automatically</div>
+</body>
+<script>
+(function(){
+  var ring=document.getElementById('ring');
+  var st=document.getElementById('st');
+  var lh=document.getElementById('lh');
+  var pWin=window.parent, pDoc=pWin.document, pSS=pWin.sessionStorage;
+  var active=false, paused=false, waitingReply=false;
+
+  function setSt(t){st.textContent=t;}
+
+  // ── TTS + auto-restart loop ───────────────────────────────────────
+  function trySpeak(){
+    var msgs=pDoc.querySelectorAll('[data-testid="stChatMessage"]');
+    var cnt=msgs.length;
+    var done=parseInt(pSS.getItem('cp_call_sp')||'0');
+    if(cnt<=done) return;
+    var last=msgs[cnt-1];
+    if(last.querySelector('[data-testid="stChatMessageAvatarUser"]')){
+      pSS.setItem('cp_call_sp',cnt); return;
+    }
+    var el=last.querySelector('[data-testid="stMarkdownContainer"] p');
+    if(!el) return;
+    var text=el.textContent.trim();
+    if(!text) return;
+    pSS.setItem('cp_call_sp',cnt);
+    waitingReply=false;
+    ring.className='ring speaking'; ring.textContent='🔊';
+    setSt('Speaking…');
+    pWin.speechSynthesis.cancel();
+    var utt=new SpeechSynthesisUtterance(text);
+    utt.lang='en-US'; utt.rate=0.93; utt.pitch=1.0;
+    utt.onend=function(){
+      ring.className='ring idle'; ring.textContent='🎤';
+      if(!paused) setTimeout(startRec,400);
+    };
+    pWin.speechSynthesis.speak(utt);
+  }
+  new MutationObserver(trySpeak).observe(pDoc.body,{childList:true,subtree:true});
+
+  // ── STT ──────────────────────────────────────────────────────────
+  var SR=pWin.SpeechRecognition||pWin.webkitSpeechRecognition;
+  if(!SR){ring.textContent='✗';setSt('Use Chrome for voice');return;}
+
+  var rec=new SR();
+  rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
+
+  function startRec(){
+    if(active||paused||waitingReply) return;
+    try{rec.start();}catch(e){setSt('Mic: '+e.message);}
+  }
+
+  ring.addEventListener('click',function(){
+    if(active){rec.stop();paused=true;setSt('Paused — tap to resume');}
+    else if(paused){paused=false;setSt('Listening…');startRec();}
+    else startRec();
+  });
+
+  rec.onstart=function(){active=true;paused=false;ring.className='ring listening';ring.textContent='🔴';setSt('Listening…');};
+  rec.onend=function(){
+    active=false;
+    if(ring.className!=='ring speaking'){ring.className='ring idle';ring.textContent='🎤';}
+    if(!paused&&!waitingReply) setTimeout(startRec,600);
+  };
+  rec.onerror=function(e){
+    setSt(e.error==='no-speech'?'No speech — listening again…':'Error: '+e.error);
+    setTimeout(startRec,1200);
+  };
+  rec.onresult=function(e){
+    var text=e.results[0][0].transcript;
+    lh.textContent='You: "'+text+'"';
+    setSt('Processing…');
+    waitingReply=true;
+    submit(text);
+  };
+
+  function submit(text){
+    var ta=pDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
+    if(!ta){setSt('Input not found');return;}
+    var setter=Object.getOwnPropertyDescriptor(pWin.HTMLTextAreaElement.prototype,'value').set;
+    setter.call(ta,text);
+    ta.dispatchEvent(new Event('input',{bubbles:true}));
+    setTimeout(function(){
+      var sub=pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
+      if(sub) sub.click();
+    },80);
+  }
+
+  // Auto-start after short delay
+  setTimeout(function(){setSt('Tap ring or wait…');startRec();},900);
+})();
+</script>
+</html>
+"""
+
+
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 
 def render(adata_run) -> None:
     """在页面底部注入浮动聊天组件，在 app.py 末尾调用一次即可。"""
     ss = st.session_state
-    if "cp_open"        not in ss: ss.cp_open        = False
-    if "cp_messages"    not in ss: ss.cp_messages    = []
-    if "cp_history"     not in ss: ss.cp_history     = []
-    if "cp_start_voice" not in ss: ss.cp_start_voice = False
+    if "cp_open"      not in ss: ss.cp_open      = False
+    if "cp_call_open" not in ss: ss.cp_call_open = False
+    if "cp_messages"  not in ss: ss.cp_messages  = []
+    if "cp_history"   not in ss: ss.cp_history   = []
 
     st.markdown(_CSS, unsafe_allow_html=True)
 
-    # Chat FAB — toggles panel; closing resets conversation
+    # 💬 Chat FAB — toggles text panel; closing resets conversation
     fab_label = _FAB_CLOSE if ss.cp_open else _FAB_OPEN
     if st.button(fab_label, key="cp_fab"):
         ss.cp_open = not ss.cp_open
         if not ss.cp_open:
             ss.cp_messages = []
             ss.cp_history  = []
+        ss.cp_call_open = False          # close call panel if switching to chat
         st.rerun()
 
-    # Phone FAB — opens panel and auto-starts voice recording
+    # 📞 Phone FAB — toggles voice call panel (mutually exclusive with text chat)
     if st.button(_PHONE_BTN, key="cp_phone"):
-        ss.cp_open        = True
-        ss.cp_start_voice = True
+        ss.cp_call_open = not ss.cp_call_open
+        if ss.cp_call_open:
+            ss.cp_open = False           # hide text chat when call opens
+        else:
+            ss.cp_messages = []          # clear transcript when hanging up
+            ss.cp_history  = []
         st.rerun()
 
     components.html(_JS_OBSERVER, height=0, scrolling=False)
 
-    if not ss.cp_open:
-        return
-
-    with st.container():
-        st.markdown(
-            f'<div id="{_PANEL_MARKER}" style="display:none;height:0;overflow:hidden;"></div>',
-            unsafe_allow_html=True,
-        )
-
-        col_title, col_new = st.columns([5, 1])
-        with col_title:
+    # ── Text chat panel ───────────────────────────────────────────────
+    if ss.cp_open:
+        with st.container():
             st.markdown(
-                "<div style='padding:6px 0 4px'>"
-                "<span style='font-weight:700;font-size:15px;color:#fff'>🧬 CellPortal AI Assistant</span><br>"
-                "<span style='font-size:12px;color:#888'>Answers based on your loaded data</span>"
-                "</div>",
+                f'<div id="{_PANEL_MARKER}" style="display:none;height:0;overflow:hidden;"></div>',
                 unsafe_allow_html=True,
             )
-        with col_new:
-            if st.button("🔄", key="cp_new", help="New conversation"):
-                ss.cp_messages = []
-                ss.cp_history  = []
-                st.rerun()
 
-        st.divider()
+            col_title, col_new = st.columns([5, 1])
+            with col_title:
+                st.markdown(
+                    "<div style='padding:6px 0 4px'>"
+                    "<span style='font-weight:700;font-size:15px;color:#fff'>🧬 CellPortal AI Assistant</span><br>"
+                    "<span style='font-size:12px;color:#888'>Answers based on your loaded data</span>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_new:
+                if st.button("🔄", key="cp_new", help="New conversation"):
+                    ss.cp_messages = []
+                    ss.cp_history  = []
+                    st.rerun()
 
-        autostart = ss.cp_start_voice
-        if autostart:
-            ss.cp_start_voice = False
-        components.html(
-            _VOICE_JS.replace("__AUTOSTART__", "true" if autostart else "false"),
-            height=52, scrolling=False,
-        )
+            st.divider()
 
-        for msg in ss.cp_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+            components.html(
+                _VOICE_JS.replace("__AUTOSTART__", "false"),
+                height=52, scrolling=False,
+            )
 
-        if not ss.cp_messages:
+            for msg in ss.cp_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            if not ss.cp_messages:
+                st.markdown(
+                    "<p style='font-size:12px;color:#aaa;margin:0 0 6px'>Try a quick question or type your own:</p>",
+                    unsafe_allow_html=True,
+                )
+                col1, col2 = st.columns(2)
+                for i, qr in enumerate(QUICK_REPLIES):
+                    col = col1 if i % 2 == 0 else col2
+                    if col.button(qr, key=f"cp_qr_{i}", use_container_width=True):
+                        _handle_message(qr, adata_run)
+
+            user_input = st.chat_input("Ask a question…", key="cp_input")
+            if user_input:
+                _handle_message(user_input, adata_run)
+
+    # ── Voice call panel ──────────────────────────────────────────────
+    if ss.cp_call_open:
+        with st.container():
             st.markdown(
-                "<p style='font-size:12px;color:#aaa;margin:0 0 6px'>Try a quick question or type your own:</p>",
+                f'<div id="{_CALL_ANCHOR}" style="display:none;height:0;overflow:hidden;"></div>',
                 unsafe_allow_html=True,
             )
-            col1, col2 = st.columns(2)
-            for i, qr in enumerate(QUICK_REPLIES):
-                col = col1 if i % 2 == 0 else col2
-                if col.button(qr, key=f"cp_qr_{i}", use_container_width=True):
-                    _handle_message(qr, adata_run)
 
-        user_input = st.chat_input("Ask a question…", key="cp_input")
-        if user_input:
-            _handle_message(user_input, adata_run)
+            col_title, col_hangup = st.columns([5, 1])
+            with col_title:
+                st.markdown(
+                    "<div style='padding:6px 0 4px'>"
+                    "<span style='font-weight:700;font-size:15px;color:#a0e8b0'>📞 CellPortal AI</span><br>"
+                    "<span style='font-size:12px;color:#4a7a58'>Voice conversation · powered by Claude</span>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_hangup:
+                if st.button("🔴", key="cp_hangup", help="End call"):
+                    ss.cp_call_open = False
+                    ss.cp_messages  = []
+                    ss.cp_history   = []
+                    st.rerun()
+
+            st.divider()
+
+            # Continuous voice loop (auto-starts, auto-restarts after each AI reply)
+            components.html(_CALL_VOICE_JS, height=175, scrolling=False)
+
+            # Transcript of the conversation
+            for msg in ss.cp_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            # Hidden chat_input — voice JS submits here; user can also type
+            call_text = st.chat_input("Or type here…", key="cp_call_input")
+            if call_text:
+                _handle_message(call_text, adata_run)
