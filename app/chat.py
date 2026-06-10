@@ -109,18 +109,48 @@ def call_llm(user_message: str, history: list, adata) -> str:
 
 _FAB_OPEN   = "💬"   # shown when panel is closed
 _FAB_CLOSE  = "✕"    # shown when panel is open — always visible at bottom-right
+_PHONE_BTN  = "📞"   # always-visible voice/call FAB below the chat FAB
 _PANEL_MARKER = "cp-panel-anchor"
 
 _CSS = """
 <style>
-/* ── FAB 浮动按钮（MutationObserver 找到后加 cp-fab-wrapper class）── */
+/* ── Chat FAB — raised to sit above phone FAB ── */
 .cp-fab-wrapper {
     position: fixed !important;
-    bottom: 30px !important;
-    right: 30px !important;
+    bottom: 100px !important;
+    right: 26px !important;
     z-index: 10000 !important;
     width: 60px !important;
     height: 60px !important;
+}
+
+/* ── Phone FAB ── */
+.cp-phone-wrapper {
+    position: fixed !important;
+    bottom: 26px !important;
+    right: 26px !important;
+    z-index: 10000 !important;
+    width: 60px !important;
+    height: 60px !important;
+}
+.cp-phone-wrapper button {
+    width: 60px !important; height: 60px !important;
+    border-radius: 50% !important;
+    background: radial-gradient(circle at 38% 32%, #7fd4a8 0%, #2d7a54 48%, #163d2a 100%) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,.55), inset 0 1px 3px rgba(255,255,255,.30) !important;
+    color: white !important; border: none !important; font-size: 26px !important;
+    padding: 0 !important; cursor: pointer !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+    transition: transform .15s, box-shadow .15s !important;
+}
+.cp-phone-wrapper button p,
+.cp-phone-wrapper button div,
+.cp-phone-wrapper button span {
+    font-size: 26px !important; line-height: 1 !important; margin: 0 !important; padding: 0 !important;
+}
+.cp-phone-wrapper button:hover {
+    transform: scale(1.08) !important;
+    box-shadow: 0 6px 26px rgba(0,0,0,.65), inset 0 1px 3px rgba(255,255,255,.30) !important;
 }
 .cp-fab-wrapper button {
     width: 60px !important;
@@ -165,7 +195,7 @@ _CSS = """
 /* ── 浮动聊天面板（MutationObserver 动态加 class）── */
 .cp-chat-panel {
     position: fixed !important;
-    bottom: 104px !important;
+    bottom: 174px !important;
     right: 30px !important;
     width: 380px !important;
     max-height: 560px !important;
@@ -227,13 +257,23 @@ _CSS = """
 _JS_OBSERVER = """
 <script>
 (function() {
-    const MARKER    = "%(marker)s";
+    const MARKER     = "%(marker)s";
     const FAB_LABELS = new Set(["%(fab_open)s", "%(fab_close)s"]);
+    const PHONE_BTN  = "%(phone)s";
+
+    function stButtonWrapper(b) {
+        let el = b.parentElement;
+        while (el) {
+            if (el.getAttribute && el.getAttribute('data-testid') === 'stButton') return el;
+            el = el.parentElement;
+        }
+        return null;
+    }
 
     function applyFloat() {
         const d = window.parent.document;
 
-        // Float the chat panel — find hidden anchor div by id
+        // Float the chat panel
         const anchor = d.getElementById(MARKER);
         if (anchor) {
             let el = anchor;
@@ -247,20 +287,19 @@ _JS_OBSERVER = """
             }
         }
 
-        // Style FAB button (works for both 💬 and ✕ states)
-        const btns = d.querySelectorAll('button');
-        for (const b of btns) {
-            if (!FAB_LABELS.has(b.textContent.trim())) continue;
-            // Skip buttons that are inside the chat panel
-            if (b.closest('.cp-chat-panel')) continue;
-            let el = b.parentElement;
-            while (el) {
-                if (el.getAttribute && el.getAttribute('data-testid') === 'stButton') {
-                    if (!el.classList.contains('cp-fab-wrapper'))
-                        el.classList.add('cp-fab-wrapper');
-                    break;
-                }
-                el = el.parentElement;
+        // Style all FAB buttons
+        for (const b of d.querySelectorAll('button')) {
+            const txt = b.textContent.trim();
+            const wrapper = stButtonWrapper(b);
+            if (!wrapper) continue;
+
+            if (FAB_LABELS.has(txt) && !b.closest('.cp-chat-panel')) {
+                if (!wrapper.classList.contains('cp-fab-wrapper'))
+                    wrapper.classList.add('cp-fab-wrapper');
+            }
+            if (txt === PHONE_BTN) {
+                if (!wrapper.classList.contains('cp-phone-wrapper'))
+                    wrapper.classList.add('cp-phone-wrapper');
             }
         }
     }
@@ -270,7 +309,7 @@ _JS_OBSERVER = """
     obs.observe(window.parent.document.body, { childList: true, subtree: true });
 })();
 </script>
-""" % {"marker": _PANEL_MARKER, "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE}
+""" % {"marker": _PANEL_MARKER, "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE, "phone": _PHONE_BTN}
 
 # Voice strip: mic button (STT) + auto-read responses (TTS)
 # Runs inside the chat panel iframe; uses browser Web Speech API (Chrome recommended)
@@ -388,6 +427,8 @@ _VOICE_JS = """
     catch (e) { status.textContent = 'Mic error: ' + e.message; }
   });
 
+  var AUTOSTART = "__AUTOSTART__" === "true";
+
   rec.onstart = function () {
     active = true;
     mic.classList.add('on');
@@ -408,6 +449,13 @@ _VOICE_JS = """
     status.textContent = '“' + text + '”';
     submitToChat(text);
   };
+
+  if (AUTOSTART) {
+    setTimeout(function () {
+      try { rec.start(); }
+      catch (e) { status.textContent = 'Mic error: ' + e.message; }
+    }, 500);
+  }
 
   function submitToChat(text) {
     var ta = pDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
@@ -444,19 +492,26 @@ def _handle_message(text: str, adata_run) -> None:
 def render(adata_run) -> None:
     """在页面底部注入浮动聊天组件，在 app.py 末尾调用一次即可。"""
     ss = st.session_state
-    if "cp_open"     not in ss: ss.cp_open     = False
-    if "cp_messages" not in ss: ss.cp_messages = []
-    if "cp_history"  not in ss: ss.cp_history  = []
+    if "cp_open"        not in ss: ss.cp_open        = False
+    if "cp_messages"    not in ss: ss.cp_messages    = []
+    if "cp_history"     not in ss: ss.cp_history     = []
+    if "cp_start_voice" not in ss: ss.cp_start_voice = False
 
     st.markdown(_CSS, unsafe_allow_html=True)
 
-    # FAB toggles panel; closing also resets conversation so reopening shows quick replies
+    # Chat FAB — toggles panel; closing resets conversation
     fab_label = _FAB_CLOSE if ss.cp_open else _FAB_OPEN
     if st.button(fab_label, key="cp_fab"):
         ss.cp_open = not ss.cp_open
-        if not ss.cp_open:          # just closed — clear history for a fresh start
+        if not ss.cp_open:
             ss.cp_messages = []
             ss.cp_history  = []
+        st.rerun()
+
+    # Phone FAB — opens panel and auto-starts voice recording
+    if st.button(_PHONE_BTN, key="cp_phone"):
+        ss.cp_open        = True
+        ss.cp_start_voice = True
         st.rerun()
 
     components.html(_JS_OBSERVER, height=0, scrolling=False)
@@ -487,7 +542,13 @@ def render(adata_run) -> None:
 
         st.divider()
 
-        components.html(_VOICE_JS, height=52, scrolling=False)
+        autostart = ss.cp_start_voice
+        if autostart:
+            ss.cp_start_voice = False
+        components.html(
+            _VOICE_JS.replace("__AUTOSTART__", "true" if autostart else "false"),
+            height=52, scrolling=False,
+        )
 
         for msg in ss.cp_messages:
             with st.chat_message(msg["role"]):
