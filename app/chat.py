@@ -600,10 +600,15 @@ _CALL_VOICE_JS = """
     var done=parseInt(pSS.getItem('cp_call_sp')||'0');
     if(cnt<=done) return;
     var last=msgs[cnt-1];
-    if(last.querySelector('[data-testid="stChatMessageAvatarUser"]')){
+    // Skip user messages (Streamlit uses chatAvatarIcon-user testid)
+    if(last.querySelector('[data-testid="chatAvatarIcon-user"]') ||
+       last.querySelector('[data-testid="stChatMessageAvatarUser"]')){
       pSS.setItem('cp_call_sp',cnt); return;
     }
-    var el=last.querySelector('[data-testid="stMarkdownContainer"] p');
+    // Extract text — try multiple selectors across Streamlit versions
+    var el=last.querySelector('[data-testid="stMarkdownContainer"] p') ||
+           last.querySelector('.stMarkdown p') ||
+           last.querySelector('p');
     if(!el) return;
     var text=el.textContent.trim();
     if(!text) return;
@@ -654,24 +659,45 @@ _CALL_VOICE_JS = """
   rec.onresult=function(e){
     var text=e.results[0][0].transcript;
     lh.textContent='You: "'+text+'"';
-    setSt('Processing…');
+    setSt('Sending…');
     waitingReply=true;
+    // Safety: reset if no reply in 20s
+    setTimeout(function(){
+      if(waitingReply){ waitingReply=false; setSt('No reply — listening again…'); scheduleStart(600); }
+    },20000);
     submit(text);
   };
 
   function submit(text){
     var ta=pDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
-    if(!ta){setSt('Input not found');return;}
+    if(!ta){
+      setSt('Chat input not found — please type instead');
+      lh.textContent=''; waitingReply=false; scheduleStart(1500); return;
+    }
+    // Inject value via React-compatible native setter
     var setter=Object.getOwnPropertyDescriptor(pWin.HTMLTextAreaElement.prototype,'value').set;
     setter.call(ta,text);
     ta.dispatchEvent(new Event('input',{bubbles:true}));
+    ta.dispatchEvent(new Event('change',{bubbles:true}));
+    setSt('Waiting for reply…');
     setTimeout(function(){
+      // Try submit button first
       var sub=pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
-      if(sub) sub.click();
-    },80);
+      if(sub && !sub.disabled){ sub.click(); return; }
+      // Fallback: Enter key
+      ta.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',keyCode:13,code:'Enter',bubbles:true,cancelable:true}));
+      ta.dispatchEvent(new KeyboardEvent('keyup',   {key:'Enter',keyCode:13,code:'Enter',bubbles:true}));
+      // Last resort: try button again after React updates
+      setTimeout(function(){
+        var sub2=pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
+        if(sub2) sub2.click();
+      },200);
+    },150);
   }
 
-  // Auto-start once after short delay
+  // Initial check for already-rendered messages (fires after page rerun)
+  setTimeout(trySpeak, 400);
+  // Auto-start mic
   scheduleStart(900);
 })();
 </script>
