@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import json
+import boto3
+import streamlit as st
+import streamlit.components.v1 as components
+
+# ── 预设快捷问题 ──────────────────────────────────────────────────────────────
+QUICK_REPLIES = [
+    "📊 What cell types are in the current dataset?",
+    "🔬 What are the marker genes for Cluster 0?",
+    "⚙️ How do I set the Leiden resolution?",
+    "📖 How do I upload my own data?",
+]
+
+# ── 数据上下文构建 ─────────────────────────────────────────────────────────────
+
+def _get_data_context(adata) -> str:
+    if adata is None:
+        return "No dataset loaded."
+
+    lines = [f"Cells: {adata.n_obs}, Genes: {adata.n_vars}"]
+
+    col = (
+        "cell_type" if "cell_type" in adata.obs.columns
+        else "leiden" if "leiden" in adata.obs.columns
+        else "louvain" if "louvain" in adata.obs.columns
+        else None
+    )
+    if col:
+        counts = adata.obs[col].value_counts()
+        total = len(adata.obs)
+        lines.append(f"\nCell composition (by '{col}'):")
+        for name, cnt in counts.items():
+            lines.append(f"  {name}: {cnt} cells ({cnt / total * 100:.1f}%)")
+
+    if "rank_genes_groups" in adata.uns:
+        try:
+            import pandas as pd
+            df = pd.DataFrame(adata.uns["rank_genes_groups"]["names"]).head(5)
+            lines.append("\nTop 5 marker genes per cluster:")
+            lines.append(df.to_string())
+        except Exception:
+            pass
+    else:
+        lines.append("\nMarker genes not yet computed (click Compute in the Marker Genes tab).")
+
+    if "leiden" in adata.obs.columns:
+        lines.append(f"\nLeiden clusters: {adata.obs['leiden'].nunique()}")
+    lines.append("UMAP: " + ("computed" if "X_umap" in adata.obsm else "not computed"))
+
+    return "\n".join(lines)
+
+
+def _system_prompt(adata) -> str:
+    return f"""You are the AI assistant for CellPortal, specializing in single-cell RNA sequencing (scRNA-seq) analysis.
+
+Current dataset:
+{_get_data_context(adata)}
+
+Your capabilities:
+1. Data Q&A: interpret cell type composition, marker genes, and clustering results from the data above
+2. Method explanations: explain scRNA-seq algorithms and parameters (UMAP, Leiden clustering, CellTypist, etc.)
+3. Platform guidance: help users operate CellPortal (upload data, run analysis, view results)
+
+Response rules (strictly follow):
+- Always respond in English
+- Do NOT use # or ## headings; use **bold** for emphasis instead
+- Keep lists to 6 items or fewer
+- Keep total response under 150 words"""
+
+
+# ── Gemini API 调用 ───────────────────────────────────────────────────────────
+
+def call_llm(user_message: str, history: list, adata) -> str:
+    """调用 AWS Bedrock Claude 3.5 Haiku，返回文字回答。"""
+    client = boto3.client(
+        service_name="bedrock-runtime",
+        region_name=st.secrets["aws"]["AWS_DEFAULT_REGION"],
+        aws_access_key_id=st.secrets["aws"]["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=st.secrets["aws"]["AWS_SECRET_ACCESS_KEY"],
+    )
+
+    messages = []
+    for msg in history:
+        role = "user" if msg["role"] == "user" else "assistant"
+        messages.append({"role": role, "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1024,
+        "system": _system_prompt(adata),
+        "messages": messages,
+    })
+
+    try:
+        response = client.invoke_model(
+            modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            body=body,
+        )
+        result = json.loads(response["body"].read())
+        return result["content"][0]["text"]
+    except Exception as e:
+        return f"Sorry, request failed: {e}"
+
+
+# ── UI 常量 ───────────────────────────────────────────────────────────────────
+
+_FAB_OPEN   = "💬"   # shown when panel is closed
+_FAB_CLOSE  = "✕"    # shown when panel is open — always visible at bottom-right
+_PANEL_MARKER = "cp-panel-anchor"
+
+_CSS = """
+<style>
+/* ── FAB 浮动按钮（MutationObserver 找到后加 cp-fab-wrapper class）── */
+.cp-fab-wrapper {
+    position: fixed !important;
+    bottom: 30px !important;
+    right: 30px !important;
+    z-index: 10000 !important;
+    width: 60px !important;
+    height: 60px !important;
+}
+.cp-fab-wrapper button {
+    width: 60px !important;
+    height: 60px !important;
+    border-radius: 50% !important;
+    /* 渐变+内高光，仿玻璃质感 */
+    background: radial-gradient(
+        circle at 38% 32%,
+        #7fd4a8 0%,
+        #2d7a54 48%,
+        #163d2a 100%
+    ) !important;
+    box-shadow:
+        0 4px 20px rgba(0,0,0,.55),
+        inset 0 1px 3px rgba(255,255,255,.30) !important;
+    color: white !important;
+    border: none !important;
+    font-size: 28px !important;
+    padding: 0 !important;
+    transition: transform .15s, box-shadow .15s !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+/* Streamlit 把按钮文字包在 <p> 里，需要单独设字号 */
+.cp-fab-wrapper button p,
+.cp-fab-wrapper button div,
+.cp-fab-wrapper button span {
+    font-size: 28px !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.cp-fab-wrapper button:hover {
+    transform: scale(1.08) !important;
+    box-shadow:
+        0 6px 26px rgba(0,0,0,.65),
+        inset 0 1px 3px rgba(255,255,255,.30) !important;
+}
+
+/* ── 浮动聊天面板（MutationObserver 动态加 class）── */
+.cp-chat-panel {
+    position: fixed !important;
+    bottom: 104px !important;
+    right: 30px !important;
+    width: 380px !important;
+    max-height: 560px !important;
+    overflow-y: auto !important;
+    background: #111318 !important;
+    border: 1px solid #2a3040 !important;
+    border-radius: 18px !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
+    z-index: 9999 !important;
+    padding-bottom: 8px !important;
+}
+
+/* ── 聊天内容字体大小 & 颜色 ── */
+.cp-chat-panel p    { font-size: 13px !important; line-height: 1.6 !important; color: #e8eaf0 !important; }
+.cp-chat-panel li   { font-size: 13px !important; line-height: 1.6 !important; color: #e8eaf0 !important; }
+.cp-chat-panel span { color: #e8eaf0 !important; }
+.cp-chat-panel strong, .cp-chat-panel b { color: #ffffff !important; font-weight: 600 !important; }
+.cp-chat-panel h1 { font-size: 15px !important; font-weight: 700 !important; color: #ffffff !important; margin: 6px 0 4px !important; }
+.cp-chat-panel h2 { font-size: 14px !important; font-weight: 600 !important; color: #ffffff !important; margin: 5px 0 3px !important; }
+.cp-chat-panel h3 { font-size: 13px !important; font-weight: 600 !important; color: #ffffff !important; margin: 4px 0 2px !important; }
+.cp-chat-panel code { font-size: 12px !important; color: #a8d8b0 !important; background: #1e2a22 !important; padding: 1px 4px !important; border-radius: 3px !important; }
+
+/* ── 面板内所有普通按钮（快捷问题 + 🔄）深色风格，覆盖 Streamlit 默认白色 ── */
+.cp-chat-panel button,
+.cp-chat-panel button:focus,
+.cp-chat-panel button:active,
+.cp-chat-panel button:focus-visible {
+    background: #1c2b22 !important;
+    background-color: #1c2b22 !important;
+    color: #c8e6d0 !important;
+    border: 1px solid #2e4a38 !important;
+    border-radius: 10px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 6px 10px !important;
+    box-shadow: none !important;
+    transition: background .15s, border-color .15s !important;
+}
+.cp-chat-panel button:hover {
+    background: #26402e !important;
+    background-color: #26402e !important;
+    border-color: #4a7a5a !important;
+    color: #e8f5ed !important;
+}
+
+/* 聊天输入框发送箭头按钮保持默认 */
+.cp-chat-panel [data-testid="stChatInputSubmitButton"] button,
+.cp-chat-panel [data-testid="stChatInputSubmitButton"] button:focus,
+.cp-chat-panel [data-testid="stChatInputSubmitButton"] button:hover {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    color: inherit !important;
+}
+</style>
+"""
+
+# MutationObserver：(1) 浮动聊天面板  (2) 给 FAB 按钮加定位 class
+_JS_OBSERVER = """
+<script>
+(function() {
+    const MARKER    = "%(marker)s";
+    const FAB_LABELS = new Set(["%(fab_open)s", "%(fab_close)s"]);
+
+    function applyFloat() {
+        const d = window.parent.document;
+
+        // Float the chat panel — find hidden anchor div by id
+        const anchor = d.getElementById(MARKER);
+        if (anchor) {
+            let el = anchor;
+            while (el && el.getAttribute) {
+                if (el.getAttribute('data-testid') === 'stVerticalBlock') {
+                    if (!el.classList.contains('cp-chat-panel'))
+                        el.classList.add('cp-chat-panel');
+                    break;
+                }
+                el = el.parentElement;
+            }
+        }
+
+        // Style FAB button (works for both 💬 and ✕ states)
+        const btns = d.querySelectorAll('button');
+        for (const b of btns) {
+            if (!FAB_LABELS.has(b.textContent.trim())) continue;
+            // Skip buttons that are inside the chat panel
+            if (b.closest('.cp-chat-panel')) continue;
+            let el = b.parentElement;
+            while (el) {
+                if (el.getAttribute && el.getAttribute('data-testid') === 'stButton') {
+                    if (!el.classList.contains('cp-fab-wrapper'))
+                        el.classList.add('cp-fab-wrapper');
+                    break;
+                }
+                el = el.parentElement;
+            }
+        }
+    }
+
+    applyFloat();
+    const obs = new MutationObserver(applyFloat);
+    obs.observe(window.parent.document.body, { childList: true, subtree: true });
+})();
+</script>
+""" % {"marker": _PANEL_MARKER, "fab_open": _FAB_OPEN, "fab_close": _FAB_CLOSE}
+
+
+# ── 消息处理 ──────────────────────────────────────────────────────────────────
+
+def _handle_message(text: str, adata_run) -> None:
+    ss = st.session_state
+    ss.cp_messages.append({"role": "user", "content": text})
+    with st.spinner("Thinking…"):
+        reply = call_llm(text, ss.cp_history, adata_run)
+    ss.cp_messages.append({"role": "assistant", "content": reply})
+    ss.cp_history.append({"role": "user", "content": text})
+    ss.cp_history.append({"role": "assistant", "content": reply})
+    st.rerun()
+
+
+# ── 主入口 ────────────────────────────────────────────────────────────────────
+
+def render(adata_run) -> None:
+    """在页面底部注入浮动聊天组件，在 app.py 末尾调用一次即可。"""
+    ss = st.session_state
+    if "cp_open"     not in ss: ss.cp_open     = False
+    if "cp_messages" not in ss: ss.cp_messages = []
+    if "cp_history"  not in ss: ss.cp_history  = []
+
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+    # FAB toggles panel; closing also resets conversation so reopening shows quick replies
+    fab_label = _FAB_CLOSE if ss.cp_open else _FAB_OPEN
+    if st.button(fab_label, key="cp_fab"):
+        ss.cp_open = not ss.cp_open
+        if not ss.cp_open:          # just closed — clear history for a fresh start
+            ss.cp_messages = []
+            ss.cp_history  = []
+        st.rerun()
+
+    components.html(_JS_OBSERVER, height=0, scrolling=False)
+
+    if not ss.cp_open:
+        return
+
+    with st.container():
+        st.markdown(
+            f'<div id="{_PANEL_MARKER}" style="display:none;height:0;overflow:hidden;"></div>',
+            unsafe_allow_html=True,
+        )
+
+        col_title, col_new = st.columns([5, 1])
+        with col_title:
+            st.markdown(
+                "<div style='padding:6px 0 4px'>"
+                "<span style='font-weight:700;font-size:15px;color:#fff'>🧬 CellPortal AI Assistant</span><br>"
+                "<span style='font-size:12px;color:#888'>Answers based on your loaded data</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        with col_new:
+            if st.button("🔄", key="cp_new", help="New conversation"):
+                ss.cp_messages = []
+                ss.cp_history  = []
+                st.rerun()
+
+        st.divider()
+
+        for msg in ss.cp_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        if not ss.cp_messages:
+            st.markdown(
+                "<p style='font-size:12px;color:#aaa;margin:0 0 6px'>Try a quick question or type your own:</p>",
+                unsafe_allow_html=True,
+            )
+            col1, col2 = st.columns(2)
+            for i, qr in enumerate(QUICK_REPLIES):
+                col = col1 if i % 2 == 0 else col2
+                if col.button(qr, key=f"cp_qr_{i}", use_container_width=True):
+                    _handle_message(qr, adata_run)
+
+        user_input = st.chat_input("Ask a question…", key="cp_input")
+        if user_input:
+            _handle_message(user_input, adata_run)

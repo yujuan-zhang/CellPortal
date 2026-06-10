@@ -8,3 +8,4 @@ pandas
 streamlit
 geoparse
 ffq
+boto3

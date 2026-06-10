@@ -1,6 +1,9 @@
 import streamlit as st
 import traceback
 import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+import chat
 
 st.set_page_config(page_title="AI-Powered Single-Cell Analysis Platform", layout="wide")
 
@@ -296,3 +299,5 @@ with tab3:
                 st.dataframe(marker_df, width='stretch')
             except Exception as e:
                 st.error(f"Could not display marker genes: {e}")
+
+chat.render(adata_run)
