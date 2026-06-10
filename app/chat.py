@@ -567,9 +567,31 @@ _CALL_VOICE_JS = """
   var st=document.getElementById('st');
   var lh=document.getElementById('lh');
   var pWin=window.parent, pDoc=pWin.document, pSS=pWin.sessionStorage;
-  var active=false, paused=false, waitingReply=false;
+  var active=false, starting=false, paused=false, waitingReply=false;
+  var startTimer=null;
 
   function setSt(t){st.textContent=t;}
+
+  // Single-entry scheduled start — cancels any pending duplicate
+  function scheduleStart(delay){
+    if(startTimer) clearTimeout(startTimer);
+    startTimer=setTimeout(startRec, delay);
+  }
+
+  function startRec(){
+    startTimer=null;
+    if(active||starting||paused||waitingReply) return;
+    starting=true;
+    try{
+      rec.start();
+    }catch(e){
+      starting=false;
+      // Already running (InvalidStateError) — treat as active
+      if(e.name==='InvalidStateError'){ active=true; return; }
+      setSt('Mic error — retrying…');
+      scheduleStart(1500);
+    }
+  }
 
   // ── TTS + auto-restart loop ───────────────────────────────────────
   function trySpeak(){
@@ -594,7 +616,7 @@ _CALL_VOICE_JS = """
     utt.lang='en-US'; utt.rate=0.93; utt.pitch=1.0;
     utt.onend=function(){
       ring.className='ring idle'; ring.textContent='🎤';
-      if(!paused) setTimeout(startRec,400);
+      if(!paused) scheduleStart(400);
     };
     pWin.speechSynthesis.speak(utt);
   }
@@ -607,26 +629,27 @@ _CALL_VOICE_JS = """
   var rec=new SR();
   rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
 
-  function startRec(){
-    if(active||paused||waitingReply) return;
-    try{rec.start();}catch(e){setSt('Mic: '+e.message);}
-  }
-
   ring.addEventListener('click',function(){
     if(active){rec.stop();paused=true;setSt('Paused — tap to resume');}
     else if(paused){paused=false;setSt('Listening…');startRec();}
     else startRec();
   });
 
-  rec.onstart=function(){active=true;paused=false;ring.className='ring listening';ring.textContent='🔴';setSt('Listening…');};
+  rec.onstart=function(){
+    starting=false; active=true; paused=false;
+    ring.className='ring listening'; ring.textContent='🔴';
+    setSt('Listening…');
+  };
   rec.onend=function(){
-    active=false;
+    starting=false; active=false;
     if(ring.className!=='ring speaking'){ring.className='ring idle';ring.textContent='🎤';}
-    if(!paused&&!waitingReply) setTimeout(startRec,600);
+    if(!paused&&!waitingReply) scheduleStart(500);
   };
   rec.onerror=function(e){
+    starting=false;
+    if(e.error==='aborted'||e.error==='not-allowed') return;
     setSt(e.error==='no-speech'?'No speech — listening again…':'Error: '+e.error);
-    setTimeout(startRec,1200);
+    scheduleStart(1200);
   };
   rec.onresult=function(e){
     var text=e.results[0][0].transcript;
@@ -648,8 +671,8 @@ _CALL_VOICE_JS = """
     },80);
   }
 
-  // Auto-start after short delay
-  setTimeout(function(){setSt('Tap ring or wait…');startRec();},900);
+  // Auto-start once after short delay
+  scheduleStart(900);
 })();
 </script>
 </html>
