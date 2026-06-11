@@ -148,6 +148,7 @@ _CSS = """
 .cp-phone-wrapper button div,
 .cp-phone-wrapper button span {
     font-size: 26px !important; line-height: 1 !important; margin: 0 !important; padding: 0 !important;
+    filter: brightness(0) invert(1) !important;
 }
 .cp-phone-wrapper button:hover {
     transform: scale(1.08) !important;
@@ -463,7 +464,7 @@ _VOICE_JS = """
   }
 
   var rec = new SR();
-  rec.lang = 'en-US';
+  rec.lang = pWin.navigator.language || 'en-US';
   rec.interimResults = false;
   rec.maxAlternatives = 1;
   var active = false;
@@ -535,170 +536,122 @@ def _handle_message(text: str, adata_run) -> None:
 
 
 # Voice call component — continuous STT→LLM→TTS loop, phone-call style UI
+# Python replaces __LATEST_MSG__ and __LATEST_IDX__ before passing to components.html()
 _CALL_VOICE_JS = """
 <!DOCTYPE html>
 <html>
 <head>
 <style>
   html,body{margin:0;padding:0;background:#0d1117;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
-  body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:10px 8px;gap:8px;}
-  .ring{width:72px;height:72px;border-radius:50%;background:#1a2e20;border:2px solid #2e4a38;
-    font-size:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:8px;gap:5px;position:relative;}
+  .ring{width:68px;height:68px;border-radius:50%;background:#1a2e20;border:2px solid #2e4a38;
+    font-size:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;
     transition:all .25s;user-select:none;}
   .ring.listening{background:#1b3d25;border-color:#5abd78;animation:glow-g 1.2s ease-in-out infinite;}
   .ring.speaking {background:#151e30;border-color:#4a7ab8;animation:glow-b 1.4s ease-in-out infinite;}
   .ring.idle     {background:#1a2e20;border-color:#2e4a38;}
-  @keyframes glow-g{0%,100%{box-shadow:0 0 0 0 rgba(90,189,120,.45);}50%{box-shadow:0 0 0 14px rgba(90,189,120,0);}}
-  @keyframes glow-b{0%,100%{box-shadow:0 0 0 0 rgba(74,122,184,.45);}50%{box-shadow:0 0 0 14px rgba(74,122,184,0);}}
-  #st {font-size:12px;color:#5a9a6a;letter-spacing:.3px;}
-  #lh {font-size:11px;color:#3a5a44;max-width:310px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .hint{font-size:10px;color:#2a3a2e;margin-top:2px;}
+  @keyframes glow-g{0%,100%{box-shadow:0 0 0 0 rgba(90,189,120,.45);}50%{box-shadow:0 0 0 12px rgba(90,189,120,0);}}
+  @keyframes glow-b{0%,100%{box-shadow:0 0 0 0 rgba(74,122,184,.45);}50%{box-shadow:0 0 0 12px rgba(74,122,184,0);}}
+  #st {font-size:12px;color:#5a9a6a;letter-spacing:.3px;text-align:center;}
+  #lh {font-size:12px;color:#8fcca0;max-width:310px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .hint{font-size:10px;color:#2a3a2e;}
+  #lang-btn{position:absolute;top:5px;right:7px;background:#1a2e20;border:1px solid #2e4a38;
+    color:#4a7a58;font-size:10px;border-radius:4px;padding:2px 6px;cursor:pointer;line-height:1.4;}
+  #lang-btn:hover{background:#243624;color:#8fcca0;}
 </style>
 </head>
 <body>
+  <button id="lang-btn" title="切换识别语言 / Switch STT language">🌐 <span id="lang-lbl">--</span></button>
   <div id="ring" class="ring idle" title="Tap to start/stop">🎤</div>
-  <div id="st">Connecting…</div>
+  <div id="st">Starting…</div>
   <div id="lh"></div>
-  <div class="hint">Tap ring to pause/resume · AI responds automatically</div>
+  <div class="hint">Tap ring to pause/resume · AI replies automatically</div>
 </body>
 <script>
 (function(){
   var ring=document.getElementById('ring');
-  var st=document.getElementById('st');
-  var lh=document.getElementById('lh');
+  var st  =document.getElementById('st');
+  var lh  =document.getElementById('lh');
+  var lb  =document.getElementById('lang-lbl');
   var pWin=window.parent, pDoc=pWin.document, pSS=pWin.sessionStorage;
   var active=false, starting=false, paused=false, waitingReply=false;
   var startTimer=null;
 
   function setSt(t){st.textContent=t;}
 
-  // Single-entry scheduled start — cancels any pending duplicate
-  function scheduleStart(delay){
-    if(startTimer) clearTimeout(startTimer);
-    startTimer=setTimeout(startRec, delay);
-  }
+  // ── Language toggle (zh-CN / en-US) ──────────────────────────────
+  var LANGS=['zh-CN','en-US'];
+  var lang=pSS.getItem('cp_call_lang')||pWin.navigator.language||'zh-CN';
+  if(!LANGS.includes(lang)) lang=lang.startsWith('zh')?'zh-CN':'en-US';
+  pSS.setItem('cp_call_lang',lang); lb.textContent=lang;
 
-  function startRec(){
-    startTimer=null;
-    if(active||starting||paused||waitingReply) return;
-    starting=true;
-    try{
-      rec.start();
-    }catch(e){
-      starting=false;
-      // Already running (InvalidStateError) — treat as active
-      if(e.name==='InvalidStateError'){ active=true; return; }
-      setSt('Mic error — retrying…');
-      scheduleStart(1500);
-    }
-  }
+  document.getElementById('lang-btn').addEventListener('click',function(){
+    lang=LANGS[(LANGS.indexOf(lang)+1)%LANGS.length];
+    pSS.setItem('cp_call_lang',lang); lb.textContent=lang;
+    rec=buildRec();
+    setSt('Language: '+lang);
+  });
 
-  // ── TTS + auto-restart loop ───────────────────────────────────────
-  function trySpeak(){
-    var msgs=pDoc.querySelectorAll('[data-testid="stChatMessage"]');
-    var cnt=msgs.length;
-    var done=parseInt(pSS.getItem('cp_call_sp')||'0');
-    if(cnt<=done) return;
-    var last=msgs[cnt-1];
-    // Skip user messages (Streamlit uses chatAvatarIcon-user testid)
-    if(last.querySelector('[data-testid="chatAvatarIcon-user"]') ||
-       last.querySelector('[data-testid="stChatMessageAvatarUser"]')){
-      pSS.setItem('cp_call_sp',cnt); return;
-    }
-    // Extract text — try multiple selectors across Streamlit versions
-    var el=last.querySelector('[data-testid="stMarkdownContainer"] p') ||
-           last.querySelector('.stMarkdown p') ||
-           last.querySelector('p');
-    if(!el) return;
-    var text=el.textContent.trim();
-    if(!text) return;
-    pSS.setItem('cp_call_sp',cnt);
-    waitingReply=false;
-    ring.className='ring speaking'; ring.textContent='🔊';
-    setSt('Speaking…');
-    pWin.speechSynthesis.cancel();
-    var utt=new SpeechSynthesisUtterance(text);
-    utt.lang='en-US'; utt.rate=0.93; utt.pitch=1.0;
-    utt.onend=function(){
-      ring.className='ring idle'; ring.textContent='🎤';
-      if(!paused) scheduleStart(400);
-    };
-    pWin.speechSynthesis.speak(utt);
-  }
-  new MutationObserver(trySpeak).observe(pDoc.body,{childList:true,subtree:true});
-
-  // ── STT ──────────────────────────────────────────────────────────
+  // ── SpeechRecognition ─────────────────────────────────────────────
   var SR=pWin.SpeechRecognition||pWin.webkitSpeechRecognition;
   if(!SR){ring.textContent='✗';setSt('Use Chrome for voice');return;}
 
-  var rec=new SR();
-  rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
+  function buildRec(){
+    var r=new SR();
+    r.lang=lang; r.interimResults=false; r.maxAlternatives=1;
+    r.onstart =function(){starting=false;active=true;paused=false;ring.className='ring listening';ring.textContent='🔴';setSt('Listening… ('+lang+')');};
+    r.onend   =function(){starting=false;active=false;if(ring.className!=='ring speaking'){ring.className='ring idle';ring.textContent='🎤';}if(!paused&&!waitingReply)scheduleStart(500);};
+    r.onerror =function(e){starting=false;if(e.error==='aborted')return;if(e.error==='not-allowed'){ring.className='ring idle';ring.textContent='🎤';setSt('Mic blocked — allow mic in browser');return;}setSt(e.error==='no-speech'?'No speech — try again':'Mic error: '+e.error);scheduleStart(1200);};
+    r.onresult=function(e){var t=e.results[0][0].transcript;lh.textContent='🗣 "'+t+'"';setSt('Waiting for AI reply…');waitingReply=true;setTimeout(function(){if(waitingReply){waitingReply=false;setSt('Timeout — tap ● to try again');}},30000);submit(t);};
+    return r;
+  }
+  var rec=buildRec();
+
+  function scheduleStart(d){if(startTimer)clearTimeout(startTimer);startTimer=setTimeout(startRec,d);}
+  function startRec(){startTimer=null;if(active||starting||paused||waitingReply)return;starting=true;try{rec.start();}catch(e){starting=false;rec=buildRec();setSt('Resetting mic…');scheduleStart(700);}}
 
   ring.addEventListener('click',function(){
     if(active){rec.stop();paused=true;setSt('Paused — tap to resume');}
-    else if(paused){paused=false;setSt('Listening…');startRec();}
-    else startRec();
+    else if(paused){paused=false;waitingReply=false;starting=false;rec=buildRec();setSt('Resuming…');startRec();}
+    else{waitingReply=false;startRec();}
   });
 
-  rec.onstart=function(){
-    starting=false; active=true; paused=false;
-    ring.className='ring listening'; ring.textContent='🔴';
-    setSt('Listening…');
-  };
-  rec.onend=function(){
-    starting=false; active=false;
-    if(ring.className!=='ring speaking'){ring.className='ring idle';ring.textContent='🎤';}
-    if(!paused&&!waitingReply) scheduleStart(500);
-  };
-  rec.onerror=function(e){
-    starting=false;
-    if(e.error==='aborted'||e.error==='not-allowed') return;
-    setSt(e.error==='no-speech'?'No speech — listening again…':'Error: '+e.error);
-    scheduleStart(1200);
-  };
-  rec.onresult=function(e){
-    var text=e.results[0][0].transcript;
-    lh.textContent='You: "'+text+'"';
-    setSt('Sending…');
-    waitingReply=true;
-    // Safety: reset if no reply in 20s
-    setTimeout(function(){
-      if(waitingReply){ waitingReply=false; setSt('No reply — listening again…'); scheduleStart(600); }
-    },20000);
-    submit(text);
-  };
-
+  // ── Submit (identical to working _VOICE_JS approach) ─────────────
   function submit(text){
     var ta=pDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
-    if(!ta){
-      setSt('Chat input not found — please type instead');
-      lh.textContent=''; waitingReply=false; scheduleStart(1500); return;
-    }
-    // Inject value via React-compatible native setter
-    var setter=Object.getOwnPropertyDescriptor(pWin.HTMLTextAreaElement.prototype,'value').set;
-    setter.call(ta,text);
+    if(!ta){setSt('⚠ Input not found — type below');lh.textContent='';waitingReply=false;scheduleStart(1500);return;}
+    var ns=Object.getOwnPropertyDescriptor(pWin.HTMLTextAreaElement.prototype,'value').set;
+    ns.call(ta,text);
     ta.dispatchEvent(new Event('input',{bubbles:true}));
-    ta.dispatchEvent(new Event('change',{bubbles:true}));
-    setSt('Waiting for reply…');
     setTimeout(function(){
-      // Try submit button first
       var sub=pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
-      if(sub && !sub.disabled){ sub.click(); return; }
-      // Fallback: Enter key
-      ta.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',keyCode:13,code:'Enter',bubbles:true,cancelable:true}));
-      ta.dispatchEvent(new KeyboardEvent('keyup',   {key:'Enter',keyCode:13,code:'Enter',bubbles:true}));
-      // Last resort: try button again after React updates
-      setTimeout(function(){
-        var sub2=pDoc.querySelector('button[data-testid="stChatInputSubmitButton"]');
-        if(sub2) sub2.click();
-      },200);
-    },150);
+      if(sub) sub.click();
+      else {setSt('⚠ Submit btn not found — type below');waitingReply=false;scheduleStart(1500);}
+    },80);
   }
 
-  // Initial check for already-rendered messages (fires after page rerun)
-  setTimeout(trySpeak, 400);
-  // Auto-start mic
-  scheduleStart(900);
+  // ── TTS: Python injects latest assistant reply via __LATEST_MSG__ ─
+  // Avoids unreliable DOM scanning after Streamlit reruns.
+  var injectMsg=__LATEST_MSG__;
+  var injectIdx=__LATEST_IDX__;
+
+  function speakAndResume(text){
+    ring.className='ring speaking'; ring.textContent='🔊'; setSt('Speaking…');
+    pWin.speechSynthesis.cancel();
+    var utt=new SpeechSynthesisUtterance(text);
+    utt.lang='en-US'; utt.rate=0.93; utt.pitch=1.0;
+    utt.onend=function(){ring.className='ring idle';ring.textContent='🎤';if(!paused)scheduleStart(400);};
+    pWin.speechSynthesis.speak(utt);
+  }
+
+  if(injectMsg && injectIdx>=0 && pSS.getItem('cp_call_sp')!==String(injectIdx)){
+    pSS.setItem('cp_call_sp',String(injectIdx));
+    waitingReply=false;
+    speakAndResume(injectMsg);
+  } else {
+    setSt('Tap ● to start  ·  '+lang);
+    scheduleStart(900);
+  }
 })();
 </script>
 </html>
@@ -814,8 +767,16 @@ def render(adata_run) -> None:
 
             st.divider()
 
-            # Continuous voice loop (auto-starts, auto-restarts after each AI reply)
-            components.html(_CALL_VOICE_JS, height=175, scrolling=False)
+            # Inject latest assistant message so JS speaks it without DOM scanning
+            _vm, _vi = "", -1
+            for _i in range(len(ss.cp_messages)-1, -1, -1):
+                if ss.cp_messages[_i]["role"] == "assistant":
+                    _vm, _vi = ss.cp_messages[_i]["content"], _i
+                    break
+            _call_js = (_CALL_VOICE_JS
+                .replace("__LATEST_MSG__", json.dumps(_vm))
+                .replace("__LATEST_IDX__", str(_vi)))
+            components.html(_call_js, height=195, scrolling=False)
 
             # Transcript of the conversation
             for msg in ss.cp_messages:

@@ -245,10 +245,25 @@ with tab1:
             from celltypist import models
             models.download_models(model=selected_model, force_update=False)
             model = models.Model.load(model=selected_model)
-            # CellTypist needs log1p normalized data — start from raw counts
-            adata_ct = st.session_state.get("adata_raw", adata).copy()
-            sc.pp.normalize_total(adata_ct, target_sum=1e4)
-            sc.pp.log1p(adata_ct)
+            # CellTypist needs log1p normalized data.
+            # Priority: (1) saved raw counts → normalize+log1p,
+            #           (2) adata_run.raw (set after log1p in run_preprocessing) → use directly,
+            #           (3) fallback → normalize+log1p with NaN guard.
+            import numpy as np, scipy.sparse as sp
+            if "adata_raw" in st.session_state:
+                adata_ct = st.session_state["adata_raw"].copy()
+                sc.pp.normalize_total(adata_ct, target_sum=1e4)
+                sc.pp.log1p(adata_ct)
+            elif getattr(adata_run, "raw", None) is not None:
+                adata_ct = adata_run.raw.to_adata()
+            else:
+                adata_ct = adata_run.copy()
+                sc.pp.normalize_total(adata_ct, target_sum=1e4)
+                sc.pp.log1p(adata_ct)
+            # Guard against NaN/inf (e.g. from double-normalised demo data)
+            if sp.issparse(adata_ct.X):
+                adata_ct.X = adata_ct.X.toarray()
+            adata_ct.X = np.nan_to_num(adata_ct.X, nan=0.0, posinf=10.0, neginf=0.0)
             predictions = celltypist.annotate(adata_ct, model=model, majority_voting=True)
             adata_run.obs["cell_type"] = predictions.predicted_labels["majority_voting"].values
             st.session_state["adata_run"] = adata_run
