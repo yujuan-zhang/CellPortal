@@ -581,8 +581,8 @@ _CALL_VOICE_JS = """
 
   // ── Language toggle (zh-CN / en-US) ──────────────────────────────
   var LANGS=['zh-CN','en-US'];
-  var lang=pSS.getItem('cp_call_lang')||pWin.navigator.language||'zh-CN';
-  if(!LANGS.includes(lang)) lang=lang.startsWith('zh')?'zh-CN':'en-US';
+  var lang=pSS.getItem('cp_call_lang')||'en-US';
+  if(!LANGS.includes(lang)) lang='en-US';
   pSS.setItem('cp_call_lang',lang); lb.textContent=lang;
 
   document.getElementById('lang-btn').addEventListener('click',function(){
