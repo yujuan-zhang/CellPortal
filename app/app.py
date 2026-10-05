@@ -2,6 +2,7 @@ import streamlit as st
 import traceback
 import os
 import sys
+import hashlib
 sys.path.insert(0, os.path.dirname(__file__))
 import chat
 
@@ -9,6 +10,7 @@ st.set_page_config(page_title="AI-Powered Single-Cell Analysis Platform", layout
 
 try:
     import scanpy as sc
+    from analysis import needs_preprocessing, run_preprocessing, recluster_processed
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
@@ -40,6 +42,7 @@ def load_data():
 if input_mode == "Use demo dataset (PBMC 3k)":
     try:
         adata = load_data()
+        source_key = "demo"
         st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
     except Exception as e:
         st.error(f"Failed to load demo dataset: {e}")
@@ -50,10 +53,20 @@ elif input_mode == "Upload .h5ad file":
     uploaded_file = st.file_uploader("Upload .h5ad file", type=["h5ad"])
     if uploaded_file is not None:
         import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".h5ad", delete=False) as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
-        adata = sc.read_h5ad(tmp_path)
+        payload = uploaded_file.getvalue()
+        source_key = "upload:" + hashlib.sha256(payload).hexdigest()
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".h5ad", delete=False) as tmp:
+                tmp.write(payload)
+                tmp_path = tmp.name
+            adata = sc.read_h5ad(tmp_path)
+        except Exception as error:
+            st.error(f"Could not read the uploaded .h5ad file: {error}")
+            st.stop()
+        finally:
+            if tmp_path is not None:
+                os.unlink(tmp_path)
         st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
     else:
         st.info("Please upload a .h5ad file to continue.")
@@ -102,10 +115,17 @@ elif input_mode == "Enter GEO Accession ID":
     loaded_geo_id = st.session_state.get("geo_id_loaded", "")
     if loaded_geo_id and geo_id and loaded_geo_id == geo_id and "geo_adata" in st.session_state:
         adata = st.session_state["geo_adata"]
+        source_key = "geo:" + loaded_geo_id
         st.success(f"Data loaded: {adata.n_obs} cells, {adata.n_vars} genes")
     else:
         st.info("Please enter a GEO Accession ID and click Load.")
         st.stop()
+
+# A previous analysis must never be displayed for a different input.
+if st.session_state.get("analysis_source_key") != source_key:
+    st.session_state.pop("adata_run", None)
+    st.session_state.pop("color_by", None)
+    st.session_state["analysis_source_key"] = source_key
 
 tab1, tab2, tab3 = st.tabs(["UMAP", "Cell Type Composition", "Marker Genes"])
 
@@ -126,99 +146,41 @@ st.sidebar.divider()
 st.sidebar.header("Analysis Parameters")
 resolution = st.sidebar.slider("Clustering Resolution", 0.1, 2.0, 0.7, 0.1)
 n_neighbors = st.sidebar.slider("N Neighbors", 5, 50, 10, 5)
-max_pct_mt = st.sidebar.slider("Max Mitochondrial %", 1, 20, 5, 1)
+max_pct_mt = st.sidebar.slider("Max Mitochondrial %", 1, 20, 5, 1,
+                               disabled=not needs_preprocessing(adata))
+st.sidebar.caption("Mitochondrial filtering applies to raw counts when analysis runs. "
+                   "It is disabled for already processed data.")
 
 run_button = st.sidebar.button("Re-run Analysis")
 
-
-def needs_preprocessing(a):
-    has_clustering = "leiden" in a.obs.columns or "louvain" in a.obs.columns
-    return not has_clustering or "X_umap" not in a.obsm
-
-def run_preprocessing(a, n_neighbors, resolution, progress=None, status=None):
-    def _update(pct, msg):
-        if status: status.info(msg)
-        if progress: progress.progress(pct)
-
-    _update(5, "Preprocessing: normalizing...")
-    sc.pp.normalize_total(a, target_sum=1e4)
-    sc.pp.log1p(a)
-
-    _update(15, "Preprocessing: selecting highly variable genes...")
-    try:
-        sc.pp.highly_variable_genes(a, n_top_genes=2000, flavor="seurat")
-        a = a[:, a.var.highly_variable].copy()
-    except ValueError:
-        import numpy as np
-        gene_var = np.asarray(a.X.var(axis=0)).flatten()
-        top_idx = np.argsort(gene_var)[-2000:]
-        a = a[:, top_idx].copy()
-
-    _update(25, "Preprocessing: scaling & PCA...")
-    a.raw = a  # save log1p normalized matrix for CellTypist
-    sc.pp.scale(a, max_value=10)
-    sc.tl.pca(a)
-
-    _update(50, "Computing neighborhood graph...")
-    sc.pp.neighbors(a, n_neighbors=n_neighbors, n_pcs=40)
-
-    _update(70, "Computing UMAP...")
-    sc.tl.umap(a)
-
-    _update(85, "Running Leiden clustering...")
-    sc.tl.leiden(a, resolution=resolution)
-
-    _update(100, "Done!")
-    return a
 
 
 with tab1:
     st.subheader("UMAP - Cell Clusters")
 
-    # Auto-preprocess if data has no leiden/umap (e.g. raw GEO data)
-    if needs_preprocessing(adata) and "adata_run" not in st.session_state:
-        st.info("Raw data detected — running preprocessing automatically...")
+    should_run = run_button or (needs_preprocessing(adata) and "adata_run" not in st.session_state)
+    if should_run:
         progress = st.progress(0)
         status = st.empty()
-        adata_run = run_preprocessing(adata.copy(), n_neighbors, resolution, progress, status)
-        status.success("Preprocessing complete!")
-        st.session_state["adata_run"] = adata_run
-
-    if run_button:
-        progress = st.progress(0)
-        status = st.empty()
-
-        if needs_preprocessing(adata):
-            status.info("Step 1/5: Preprocessing raw data...")
-            adata_run = run_preprocessing(adata.copy(), n_neighbors, resolution, progress, status)
-        else:
-            status.info("Step 1/4: Copying data...")
-            adata_run = adata.copy()
-            progress.progress(10)
-
-            status.info("Step 2/4: Computing neighborhood graph...")
-            sc.pp.neighbors(adata_run, n_neighbors=n_neighbors, n_pcs=40)
-            progress.progress(40)
-
-            status.info("Step 3/4: Computing UMAP...")
-            sc.tl.umap(adata_run)
-            progress.progress(60)
-
-            status.info("Step 4/4: Running Leiden clustering...")
-            sc.tl.leiden(adata_run, resolution=resolution)
-            progress.progress(80)
-
-            if "cell_type" in adata.obs.columns:
-                adata_run.obs["cell_type"] = adata.obs["cell_type"]
-            progress.progress(100)
-
+        try:
+            if needs_preprocessing(adata):
+                result = run_preprocessing(adata, n_neighbors, resolution, max_pct_mt,
+                                           progress=progress, status=status)
+            else:
+                status.info("Reclustering processed data; raw-count QC is not applied.")
+                result = recluster_processed(adata, n_neighbors, resolution)
+                progress.progress(100)
+        except ValueError as error:
+            st.error(f"Analysis could not run: {error}")
+            st.stop()
+        st.session_state["adata_run"] = result
         status.success("Analysis complete!")
-        st.session_state["adata_run"] = adata_run
 
-    if "adata_run" in st.session_state:
-        adata_run = st.session_state["adata_run"]
-    else:
-        adata_run = adata.copy()
+    adata_run = st.session_state.get("adata_run", adata).copy()
+    qc = adata_run.uns.get("cellportal_qc")
+    if qc:
+        st.caption(f"QC retained {qc['retained_cells']} of {qc['input_cells']} cells "
+                   f"at mitochondrial counts ≤ {qc['max_pct_mt']:g}%.")
 
     cluster_col = "leiden" if "leiden" in adata_run.obs.columns else "louvain"
     st.info(f"Current clusters: {adata_run.obs[cluster_col].nunique()}")
@@ -241,31 +203,18 @@ with tab1:
     st.caption(f"Auto-selected model: **{selected_model}**")
     if st.button("Run CellTypist Annotation"):
         with st.spinner("Running CellTypist annotation..."):
+            # raw is saved after count normalization and before HVG selection/scaling.
+            if adata_run.raw is None:
+                st.error("Annotation needs log1p-normalized expression in adata.raw. "
+                         "Upload raw counts for preprocessing or supply this matrix.")
+                st.stop()
+            adata_ct = adata_run.raw.to_adata()
             import celltypist
             from celltypist import models
             models.download_models(model=selected_model, force_update=False)
             model = models.Model.load(model=selected_model)
-            # CellTypist needs log1p normalized data.
-            # Priority: (1) saved raw counts → normalize+log1p,
-            #           (2) adata_run.raw (set after log1p in run_preprocessing) → use directly,
-            #           (3) fallback → normalize+log1p with NaN guard.
-            import numpy as np, scipy.sparse as sp
-            if "adata_raw" in st.session_state:
-                adata_ct = st.session_state["adata_raw"].copy()
-                sc.pp.normalize_total(adata_ct, target_sum=1e4)
-                sc.pp.log1p(adata_ct)
-            elif getattr(adata_run, "raw", None) is not None:
-                adata_ct = adata_run.raw.to_adata()
-            else:
-                adata_ct = adata_run.copy()
-                sc.pp.normalize_total(adata_ct, target_sum=1e4)
-                sc.pp.log1p(adata_ct)
-            # Guard against NaN/inf (e.g. from double-normalised demo data)
-            if sp.issparse(adata_ct.X):
-                adata_ct.X = adata_ct.X.toarray()
-            adata_ct.X = np.nan_to_num(adata_ct.X, nan=0.0, posinf=10.0, neginf=0.0)
             predictions = celltypist.annotate(adata_ct, model=model, majority_voting=True)
-            adata_run.obs["cell_type"] = predictions.predicted_labels["majority_voting"].values
+            adata_run.obs["cell_type"] = predictions.predicted_labels["majority_voting"].reindex(adata_run.obs_names).values
             st.session_state["adata_run"] = adata_run
         st.success("Annotation complete! Select 'Cell type annotation' in Color by above.")
         st.rerun()

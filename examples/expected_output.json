@@ -1,0 +1,7 @@
+{
+  "input_cells": 12,
+  "retained_cells": 9,
+  "removed_cells": 3,
+  "max_pct_mt": 5.0,
+  "retained_cell_ids": ["cell01", "cell02", "cell03", "cell04", "cell05", "cell06", "cell07", "cell08", "cell09"]
+}
